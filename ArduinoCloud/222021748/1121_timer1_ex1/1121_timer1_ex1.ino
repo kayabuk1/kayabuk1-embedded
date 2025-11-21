@@ -53,7 +53,7 @@ ISR(TIMER1_COMPA_vect){
 ISR(TIMER2_OVF_vect){ //digの2だけ小数点DPを表示させる様にすること。
   static unsigned char pos = 0x01;  //現在の桁位置(001,010,100)
   int num_to_disp = 0;  //人間が分かる数字で今なにを表示したいか
-  unsigned char seg_data = 0 ; //7seg自体に出力するnum_to_dispの形に光らせるbitpattern
+  unsigned char seg_pattern = 0 ; //7seg自体に出力するnum_to_dispの形に光らせるbitpattern
 //---残像防止の為に一度全消灯
 PORTC &= 0xF8; /* 7SEG_LED-全消灯 */
 PORTB &= 0xF0; /* 下位4bit クリア */
@@ -68,30 +68,29 @@ if(pos > 0x04) { pos = 0x01; }
       // 例: 599 から-> 5を取り出す
       // bitは7...1という順なのに、桁の大きさは0が先でややこしい...なぜだ
       num_to_disp = (timer_count / 100) % 10;
-      seg_data = disp[num_to_disp]; //計算した値を索引に7segdisp.hのﾋﾞｯﾄﾊﾟﾀｰﾝ変換数列に
+      seg_pattern = disp[num_to_disp]; //計算した値を索引に7segdisp.hのﾋﾞｯﾄﾊﾟﾀｰﾝ変換数列に
       break; //seg_dataとnum_to_dispが意味が似ていてややこしく感じる
             //どういう役割分けになっているのだろうか
 
     case (1 << DIG2): // 真ん中の桁 (1の位) + ドット [pos == 0x02]
       // 例: 599 -> 9
       num_to_disp = (timer_count / 10) % 10;
-      seg_data = disp[num_to_disp];
-      
+      seg_pattern = disp[num_to_disp];
       // ★ドット(DP)の処理
       // disp配列は0xC0(1100 0000)スタートなので、Active Low(0で点灯)です。
       // 最上位ビット(bit7)を0にするとDPが光ります。
-      seg_data &= 0x7F; // 0111 1111 とANDをとってbit7を0にする
+      seg_pattern &= 0x7F; // 0111 1111 とANDをとってbit7を0にする
                         // 0111 1111 1は上行で計算したそのまま、最上位7bitだけ０に
       break;
 
     case (1 << DIG3): // 右の桁 (0.1の位) [pos == 0x04]
       // 例: 599 -> 9
       num_to_disp = timer_count % 10;
-      seg_data = disp[num_to_disp];
+      seg_pattern = disp[num_to_disp];
       break;
   }
   //---switch(pos)で計算したseg_dataの形に光らせる
-  PORTB |= (seg_data & 0x0F); /* 下位4bit 出力 */
-  PORTD |= (seg_data & 0xF0); /* 上位4bit 出力 */
+  PORTB |= (seg_pattern & 0x0F); /* 下位4bit 出力 */
+  PORTD |= (seg_pattern & 0xF0); /* 上位4bit 出力 */
   PORTC |= pos; //最後に桁のスイッチを入れる。
 }
