@@ -4,20 +4,15 @@
  SW1（INT0）を押下するまでは、「00.0」を表示する
 if(){switch(pos)}else{}みたいにできるかな?
 それか空loop内に00.0を表示するようにすれば良いのかな？
-
 ⇒ISR(INT0_vect){}を使うのか。ただISRは入れ子には出来ないから
 ISR(INT0)⇒count_flagとかcount_stateとかを１にする
 ⇒ISR(TIMER1_COMPA_vect){if(count_flag==1)}みたいな書き方でも良いのかな。
 あとswだからチャタリング防止も必要だな、ISRの後にEIMSKのINT0を0にして、
 加えてスイッチから指を離した時のチャタリング防止コードも要るな。
-
  SW1（INT0）を押下すると、100ms ごとに「0.1」カウントアップを開始する
 ⇒これは上の内容が書ければ大丈夫。
-
  再度、SW1（INT0）を押下すると、カウントアップを停止する
-
  カウントアップ停止時にSW2（PB4）を押下して、表示をクリア（00.0）する
-
 */
 /*作りたい時間[s]=(分周比今回は256*(OCRA+1))/16*10^6[Hz] 
   OCRnA = 作りたい時間[s]*(16*10^6[Hz]/分周比256)-1 */
@@ -38,8 +33,8 @@ ISR(INT0)⇒count_flagとかcount_stateとかを１にする
 #define DIG2 1 // PC1
 #define DIG3 2 // PC2
 #define DIG4 3 // PC3
-#define SW1 2 // PD2
-#define SW2 12 // PB4
+#define SW1 2 // PD2(INT0)
+#define SW2 12 // PB4(Reset)
 unsigned char disp[]={0xC0,0xF9,0xA4,0xB0,0x99,0x92,0x82,0xD8,0x80,0x90};
 void disp7(char number){
   PORTB &= 0xF0;
@@ -48,12 +43,12 @@ void disp7(char number){
   PORTD |= (disp[number] & 0xF0);
 };
 
-volatile int timer_count = 0; //割込みとﾒｲﾝで共有する変数は毎回確認してもらう。
-volatile boolean count_flag = 0;
-volatile boolean sw_state = 0;
-volatile int chat_cnt = 0;
-volatile boolean swrst_state = 0;
-volatile int rst_cnt = 0;
+volatile int timer_count = 0; //時間計測用。割込みとﾒｲﾝで共有する変数は毎回確認してもらうのでvoltaile
+volatile boolean count_flag = 0;  //タイマカウントスタート/ストップ状態管理用フラグ
+volatile boolean sw_state = 0;  //チャタリング防止用SW1状態監視用ステート変数
+volatile int chat_cnt = 0;      //SW1用タイマ
+volatile boolean swrst_state = 0; 
+volatile int rst_cnt = 0;       //SW2用タイマ
 
 void sw_chatter()
 {
