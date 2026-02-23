@@ -163,27 +163,56 @@ void turn_left90(){
   }
   stop_motor();
 }
+/*必要機能未実装リスト
+・ライン色が灰色箇所での走行モード
+・トンネル内(暗い所)での走行モード
+・徐行走行モード
+・ETCゲート前減速＆停止モード
+・飛び出し時急停止モード
+・細ライン(手書きライン幅5㎜程度)走行モード
+・カーステレオ
+・駐車場での停止
+*/
 // --- 3. 初期設定 ---
 void setup() {
   Serial.begin(9600);
   // ピンの入出力設定をここに書く
+  // センサーピンはアナログ「入力」なので設定不要（または INPUT と明記しても良い）
+  // モーター制御ピンを「出力 (OUTPUT)」に設定する
+  // ※DDRDを直接叩く代わりに、pinModeでカプセル化して記述。
+  pinMode(RA_PHASE, OUTPUT);
+  pinMode(RA_ENABLE, OUTPUT);
+  pinMode(LB_ENABLE, OUTPUT);
+  pinMode(LB_PHASE, OUTPUT);
 }
 // --- 4. メインループ（トップダウンの論理） ---
 void loop() {
   // センサーの値を取得
-  int val_L = analogRead(PIN_SENSOR_L);
-  int val_C = analogRead(PIN_SENSOR_C);
-  int val_R = analogRead(PIN_SENSOR_R);
-
-  // 【フェーズ1: とりあえず走るロジック】
-  if (val_L < THRESHOLD_WHITE && val_C < THRESHOLD_WHITE && val_R < THRESHOLD_WHITE) {
-    // 全白：とりあえず停止
-    motor_stop();
-  } else if (val_R > THRESHOLD_BLACK) {
-    // 右が黒：右にズレているので右へ修正
-    turn_right();
+  int val_L = analogRead(L_SENSOR);
+  int val_C = analogRead(C_SENSOR);
+  int val_R = analogRead(R_SENSOR);
+if (val_L < WHITE && val_C < WHITE && val_R < WHITE) {
+    comeback(); // 白白白コース復帰動作を発動！
   }
-  // ※ここに左修正や直進を追加していく
-
-  delay(10);  // 少し待つ（チャタリング/ノイズ対策）
+  // 【優先度2】黒黒白左クランクの検知（左と中央が同時に黒）
+  else if (val_L > BLACK && val_C > BLACK) {
+    turn_left90();
+  }
+  // 【優先度3】白黒黒右クランクの検知（右と中央が同時に黒）
+  else if (val_R > BLACK && val_C > BLACK) {
+    turn_right90();
+  }
+  // 【優先度4】灰黒白通常のライントレース（左ズレ修正）
+  else if (val_L > BLACK) {
+    gradually_left();
+  }
+  // 【優先度5】白黒灰通常のライントレース（右ズレ修正）
+  else if (val_R > BLACK) {
+    gradually_right();
+  }
+  // 【優先度6】白黒白上記のどれでもない（中央だけが黒＝完璧な直進状態）
+  else {
+    motor_forward();
+  }
+  delay(10);  // ループが暴走しないように少しだけ待つ
 }
