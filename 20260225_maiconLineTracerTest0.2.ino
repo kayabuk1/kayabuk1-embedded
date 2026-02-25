@@ -1,3 +1,46 @@
+/*2026-02-25試走1回目メモ
+エラー1：速度が速すぎて、コースを飛び出す→少しバックする→コースに戻る→コースを順走する→すぐ飛び出すのループになっている。
+対処案1：速度をすべて1/2にして再度試走してみる。
+未実施対処案1－4：Arduino関数ではなく、マイコンと同じレイヤーで直接レジスタを叩くコードに変える
+変更1：#define MAX_SPEED 255 → #define MAX_SPEED 127
+     #define HALF_SPEED 127 → #define HALF_SPEED 64
+エラー2：コース脱線時の動きが想定ではその場で1回転→3輪なので、ある程度の輪を描いて走行する動作になっている。
+エラー2：コース探索時の輪を描いて走行する動きにより、再度コースを発見した時に逆走状態になってしまうことがある。
+対処2：1周に10～12秒掛かっている。12/3分割で、4秒旋回→0.1秒止まる→4秒逆旋回→0.1秒止まるのループの首を振る動きで探す動作にしてみる。
+//停止→後退→旋回(コース復帰動作)
+void comeback(){
+  stop_motor();
+  delay(100);
+  back_motor();
+  delay(100); ⇒ delay(500);
+  turning_right();
+  delay(100); ⇒ delay（500);
+追加turning_left();
+追加delay(500);
+追加turning_right();
+追加delay(500);
+}
+エラー4黒黒黒でも走行してしまう。
+対処3：黒黒黒でもコース復帰動作をするように変える。
+/*if (val_L < WHITE && val_C < WHITE && val_R < WHITE) {
+    comeback(); // 白白白コース復帰動作を発動！
+  }
+  ⇒以下に変更
+  if ((val_L < WHITE && val_C < WHITE && val_R < WHITE)||(val_L > BLACK && val_C > BLACK && val_R > BLACK)){
+    comeback(); // 白白白or黒黒黒コース復帰動作を発動！
+  }
+エラー5：comeback();関数実行時にコースにセンサーが重なってもすべての操作を終えるまで止まらず、
+        動作が終わった時にはまた、白白白でcomeback();を実施という動作になってしまっている。
+対処5：while()で括る。
+対処：read_sensor(){機能を追加。
+void read_sensor(){
+  void read_sensor(){
+  val_L = analogRead(L_SENSOR);
+  val_C = analogRead(C_SENSOR);
+  val_R = analogRead(R_SENSOR);
+}機能を追加。
+*/
+
 // ==========================================
 // ライントレーサー 制御プログラム
 // ==========================================
@@ -35,8 +78,10 @@
 // --- 1. 定数の定義（マジックナンバーの排除） ---
 #define WHITE 100
 #define BLACK 900
-#define MAX_SPEED 255  //analogWrite(出力最大値)
-#define HALF_SPEED 127
+#define MAX_SPEED 127  //analogWrite(出力最大値)
+#define HALF_SPEED 64
+/*変更：#define MAX_SPEED 255 → #define MAX_SPEED 127
+     #define HALF_SPEED 127 → #define HALF_SPEED 64*/
 //※Read(入力)は2^10の1023までの分解能があるが出力は異なるので注意。
 // ピン配置
 #define R_SENSOR A2   //端子25番
@@ -46,6 +91,10 @@
 #define RA_ENABLE 5  //PD5端子11番PWM制御⇔A_ENABLE/AIN2
 #define LB_ENABLE 6  //PD6端子12番PWM制御⇔B_ENABLE/BIN2
 #define LB_PHASE 7   //PD7端子13番⇔B_PHASE/BIN1
+#define CTC_COMP_VALUE 1599
+volatile int val_L = 0;
+volatile int val_C = 0;
+volatile int val_R = 0;
 // --- 2. モジュール（機能ごとの関数） ---
 // モーター前進関数
 void motor_forward() {
@@ -84,13 +133,48 @@ void turning_left(){
 }
 //停止→後退→旋回(コース復帰動作)
 void comeback(){
+  while(val_L < WHITE && val_R < WHITE){
   stop_motor();
   delay(100);
   back_motor();
-  delay(100);
+  delay(300);
+  read_sensor();
+    if((val_L < WHITE && val_C > BLACK && val_R < WHITE)){
+       break;
+    }
   turning_right();
-  delay(100);
+  delay(500);
+  read_sensor();
+    if((val_L < WHITE && val_C > BLACK && val_R < WHITE)){
+       break;
+    }
+  turning_left();
+  delay(1000);
+  read_sensor();
+    if((val_L < WHITE && val_C > BLACK && val_R < WHITE)){
+       break;
+    }
+  turning_right();
+  delay(500);
+  read_sensor();
+  if((val_L < WHITE && val_C > BLACK && val_R < WHITE)){
+       break;
+    }
+  }
 }
+  //停止→後退→旋回(コース復帰動作)
+/*void comeback(){
+  stop_motor();
+  delay(100);
+  back_motor();
+  delay(100); ⇒ delay(500);
+  turning_right();
+  delay(100); ⇒ delay（500);
+追加turning_left();
+追加delay(1000);
+追加turning_right();
+追加delay(500);
+}*/
 // 右へ修正する関数（左輪を速く、右輪を遅く）
 //※右センサーが黒白境界
 //map(変換したい値, 元の最小値, 元の最大値, 変換後の最小値, 変換後の最大値)を使用する
@@ -163,6 +247,12 @@ void turn_left90(){
   }
   stop_motor();
 }
+//センサー読み込み機能
+void read_sensor(){
+  val_L = analogRead(L_SENSOR);
+  val_C = analogRead(C_SENSOR);
+  val_R = analogRead(R_SENSOR);
+}
 /*必要機能未実装リスト
 ・ライン色が灰色箇所での走行モード
 ・トンネル内(暗い所)での走行モード
@@ -173,6 +263,8 @@ void turn_left90(){
 ・カーステレオ
 ・駐車場での停止
 */
+
+
 // --- 3. 初期設定 ---
 void setup() {
   Serial.begin(9600);
@@ -191,18 +283,25 @@ void setup() {
 // --- 4. メインループ（トップダウンの論理） ---
 void loop() {
   // センサーの値を取得
-  int val_L = analogRead(L_SENSOR);
-  int val_C = analogRead(C_SENSOR);
-  int val_R = analogRead(R_SENSOR);
+  val_L = analogRead(L_SENSOR);
+  val_C = analogRead(C_SENSOR);
+  val_R = analogRead(R_SENSOR);
   Serial.print("左");
   Serial.print(val_L);
   Serial.print("中");
   Serial.print(val_C);
   Serial.print("右");
   Serial.println(val_R);
-if (val_L < WHITE && val_C < WHITE && val_R < WHITE) {
-    comeback(); // 白白白コース復帰動作を発動！
+if ((val_L < WHITE && val_C < WHITE && val_R < WHITE)||(val_L > BLACK && val_C > BLACK && val_R > BLACK)){
+    comeback(); // 白白白or黒黒黒コース復帰動作を発動！
   }
+/*if (val_L < WHITE && val_C < WHITE && val_R < WHITE) {
+    comeback(); // 白白白コース復帰動作を発動！
+  }⇒以下に変更
+  if ((val_L < WHITE && val_C < WHITE && val_R < WHITE)||(val_L > BLACK && val_C > BLACK && val_R > BLACK)){
+    comeback(); // 白白白or黒黒黒コース復帰動作を発動！
+  }
+*/  
   // 【優先度2】黒黒白左クランクの検知（左と中央が同時に黒）
   else if (val_L > BLACK && val_C > BLACK) {
     turn_left90();
