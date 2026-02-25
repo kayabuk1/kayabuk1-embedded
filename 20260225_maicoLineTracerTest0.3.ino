@@ -64,7 +64,20 @@ WHITEも100⇒150に変更。
 対処：#define MAX_SPEED 100  //analogWrite(出力最大値)#define HALF_SPEED 80
       に変更した結果。ストレートおよびゆるやかな～記号の様な曲線は走ることが出来るようになった。
 エラー8：グレーの線上で前進後退をピストン運動の様に繰り返しグレーラインからそれ以上進めなくなってしまった。
-
+変更：DCモータはPWM出力が30％～25％を下回ると、ストール状態に陥る回転しなくなるとのこと。255*0.25≒64をmap()関数下限に設定。
+// 右へ修正する関数（左輪を速く、右輪を遅く）
+//※右センサーが黒白境界
+//map(変換したい値, 元の最小値, 元の最大値, 変換後の最小値, 変換後の最大値)を使用する
+//mapping＝対応付ける、割り当てるが元。
+void gradually_right() {
+  digitalWrite(RA_PHASE, 0);
+  digitalWrite(LB_PHASE, 1);//モータのどちらか片方を逆転させないと回転方向が一致しない。
+  int r_val = analogRead(R_SENSOR);
+  int speed_up = map(r_val,0,1023,HALF_SPEED,MAX_SPEED);
+  int speed_down = map(r_val,0,1023,HALF_SPEED,64);//反比例させる。
+  analogWrite(RA_ENABLE, speed_down);
+  analogWrite(LB_ENABLE, speed_up);
+}
 
 
 // ==========================================
@@ -220,7 +233,7 @@ void gradually_right() {
   digitalWrite(LB_PHASE, 1);//モータのどちらか片方を逆転させないと回転方向が一致しない。
   int r_val = analogRead(R_SENSOR);
   int speed_up = map(r_val,0,1023,HALF_SPEED,MAX_SPEED);
-  int speed_down = map(r_val,0,1023,HALF_SPEED,0);//反比例させる。
+  int speed_down = map(r_val,0,1023,HALF_SPEED,64);//反比例させる。
   analogWrite(RA_ENABLE, speed_down);
   analogWrite(LB_ENABLE, speed_up);
 }
@@ -231,7 +244,7 @@ void gradually_left(){
   digitalWrite(LB_PHASE, 1);//モータのどちらか片方を逆転させないと回転方向が一致しない。
   int l_val = analogRead(L_SENSOR);
   int speed_up = map(l_val,0,1023,HALF_SPEED,MAX_SPEED);
-  int speed_down = map(l_val,0,1023,HALF_SPEED,0);//反比例させる。
+  int speed_down = map(l_val,0,1023,HALF_SPEED,64);//反比例させる。
   analogWrite(RA_ENABLE, speed_up);
   analogWrite(LB_ENABLE, speed_down); 
 }
