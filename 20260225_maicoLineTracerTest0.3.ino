@@ -168,7 +168,7 @@ void comeback()
   for(int i = 0; i < 50; i++)
   {
     read_sensor();
-    if(val_C >= WHITE && (val_R >= WHITE || val_L >= WHITE)){
+    if(val_C >= GRAY && (val_R >= GRAY|| val_L >= GRAY)){
       stop_motor();
       delay(100);
       return;
@@ -179,7 +179,7 @@ void comeback()
   for(int i = 0; i < 100; i++)
   {
      read_sensor();
-     if(val_C >= WHITE && (val_R >= WHITE || val_L >= WHITE)){
+     if(val_C >= GRAY && (val_R >= GRAY || val_L >= GRAY)){
       stop_motor();
        delay(100);
        return;
@@ -190,7 +190,7 @@ void comeback()
   for(int i = 0; i < 50; i++)
   {
     read_sensor();
-    if(val_C >= WHITE && (val_R >= WHITE || val_L >= WHITE)){
+    if(val_C >= GRAY && (val_R >= GRAY || val_L >= GRAY)){
       stop_motor();
       delay(100);
       return;
@@ -330,7 +330,7 @@ void loop() {
   Serial.print("右");
   Serial.println(val_R);
 // */
-if ((val_L < WHITE && val_L >) && val_C < WHITE && val_R < WHITE){
+if (val_L < WHITE  && val_C < WHITE && val_R < WHITE){
     comeback(); // 白白白or黒黒黒コース復帰動作を発動！
   }
 /*if (val_L < WHITE && val_C < WHITE && val_R < WHITE) {
