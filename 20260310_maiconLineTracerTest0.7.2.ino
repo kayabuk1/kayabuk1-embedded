@@ -336,6 +336,7 @@ enum RobotState {            //RobotStateという名前付き整数リストを
   STATE_STOP_MOTOR           //9：エンジン停止状態
 };
 //enumの{}中は列挙子enumeratorと呼ぶ。
+volatile int turn_phase = 0; // クランク旋回状態の管理フラグ
 // 現在のロボットの状態を記憶する変数（初期状態は「直進」にしておく）
 // 変数のデータ型宣言していないけれど、これはデータ型は何になる？
 //⇒enumで宣言したリスト名は構造体で定義した型に近い？
@@ -379,16 +380,17 @@ void motor_forward() {
   int base_speed = HALF_SPEED + 15; 
 
   // ④ 誤差に基づき、左右のモーター出力を滑らかに増減させる
-  int left_speed  = base_speed + correction;
-  int right_speed = base_speed - correction;
+  // ★重要修正：差分が正（左が黒≒左にラインがある）なら、左へ曲がるために右輪を速く・左輪を遅くする
+  int left_speed  = base_speed - correction;
+  int right_speed = base_speed + correction;
 
   // ⑤ 算出された出力が、モータの限界（ストール限界や最大出力）を超えないよう拘束する
   left_speed  = constrain(left_speed, MIN_SPEED, MAX_SPEED);
   right_speed = constrain(right_speed, MIN_SPEED, MAX_SPEED);
 
   // ⑥ モーターへ出力
-  analogWrite(RA_ENABLE, right_speed); // 差分が正（左が白寄り）なら右輪を速くして左へ向ける
-  analogWrite(LB_ENABLE, left_speed);  // 差分が正なら左輪を遅くする
+  analogWrite(RA_ENABLE, right_speed); // 右輪
+  analogWrite(LB_ENABLE, left_speed);  // 左輪
 }
 // モーター停止（ショートブレーキ）関数
 void stop_motor() {
@@ -623,18 +625,24 @@ void turn_left90_start() {
   motor_forward();
   delay(150);  // ※ここは物理的な車軸合わせなので残してOK
   turning_left();
+  turn_phase = 0;  // ★追加：抜け確認フラグを初期化
   currentState = STATE_TURN_LEFT90_DOING;  // 状態を「旋回中」に移行！
 }
 
 // 左クランク旋回中（whileを使わず、メインループの中で黒線を待つ）
 void turn_left90_doing() {
-  // センサーはすでにメインループで読まれている
-  // 完全に白(WHITE)を通り越して、再び黒(BLACK)を踏んだら旋回完了！
-  if (val_L > BLACK) {
-    stop_motor();
-    currentState = STATE_FORWARD;  // 直進モードに復帰！
+  if (turn_phase == 0) {
+    // 完全に白(WHITE)を通り越すのをまず検知する（前進150msで完全に外れ切ってない場合があるため）
+    if (val_L < GRAY && val_C < GRAY) {
+      turn_phase = 1;  // ラインから完全に外れた
+    }
+  } else {
+    // その後、再び黒(BLACK)を踏んだら旋回完了！
+    if (val_L > BLACK || val_C > BLACK) {
+      stop_motor();
+      currentState = STATE_FORWARD;  // 直進モードに復帰！
+    }
   }
-  // それまでは turning_left() の命令が生きているので回り続ける
 }
 
 // 右クランク開始
@@ -642,14 +650,21 @@ void turn_right90_start() {
   motor_forward();
   delay(150);
   turning_right();
+  turn_phase = 0;  // ★追加：抜け確認フラグを初期化
   currentState = STATE_TURN_RIGHT90_DOING;
 }
 
 // 右クランク旋回中
 void turn_right90_doing() {
-  if (val_R > BLACK) {
-    stop_motor();
-    currentState = STATE_FORWARD;
+  if (turn_phase == 0) {
+    if (val_R < GRAY && val_C < GRAY) {
+      turn_phase = 1;
+    }
+  } else {
+    if (val_R > BLACK || val_C > BLACK) {
+      stop_motor();
+      currentState = STATE_FORWARD;
+    }
   }
 }
 // 向き揃え状態：左右センサーの差が小さくなるまでゆっくり修正する
@@ -674,9 +689,9 @@ void align_to_line() {
   //   currentState = STATE_FORWARD;
   //   return;
   if (diff > 50) {
-    turning_left();   // 左が白寄り ＝ 車体が右を向いている → 左に回す
+    turning_left();   // 左のほうが値が大きい(黒寄り) ＝ ラインが左にある → 左に回す
   } else if (diff < -50) {
-    turning_right();  // 右が白寄り ＝ 車体が左を向いている → 右に回す
+    turning_right();  // 右のほうが値が大きい(黒寄り) ＝ ラインが右にある → 右に回す
   } else {
    // 差が小さい場合は微調整完了待ち
     stop_motor();
@@ -815,7 +830,7 @@ switch (currentState) {  //➌状態がSTATE_FORWORDなのでmotor_forward関数
   case STATE_FORWARD:
     motor_forward();
     break;
-  // case STATE_CORRECT_LEFT:
+  //  // case STATE_CORRECT_LEFT:
   //   gradually_left();
   //   break;
   // case STATE_CORRECT_RIGHT:
