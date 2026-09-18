@@ -1,0 +1,1 @@
+void hardware_setup(void);
