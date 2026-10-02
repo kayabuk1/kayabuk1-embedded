@@ -12,7 +12,7 @@
 #define MUX_OFF 21
 #define MUX_A 20
 #define MUX_B 19
-#define MUX_C 28
+#define MUX_C 18
 
 #define SPI_PORT spi0
 
@@ -65,11 +65,11 @@ int main()
     // gpio_put(PIN_SCK, 0);
     gpio_put(PIN_RCK, 0);
 
-    gpio_put(MUX_OFF, 1);
+    gpio_put(MUX_OFF, 0);
 
     while (true)
     {   
-        gpio_put(MUX_OFF, 1);
+        gpio_put(MUX_OFF, 0);
 
         // // １．クロックを作る
         // gpio_put(PIN_SCK, 0);
@@ -112,22 +112,22 @@ int main()
         // gpio_put(PIN_SCK, 1);
         // sleep_us(10);
 
-        uint8_t data = 0b10101010;
+        uint8_t data = 0xCC;
         spi_write_blocking(SPI_PORT, &data, 1);
         // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
         gpio_put(PIN_RCK, 1);
-        sleep_us(1);
+        sleep_us(10);
         gpio_put(PIN_RCK, 0);
-        sleep_us(1);
+        sleep_us(10);
         // sleep_ms(100);
 
         gpio_put(MUX_A, 0);
         gpio_put(MUX_B, 0);
         gpio_put(MUX_C, 0);
 
-        gpio_put(MUX_OFF, 0);
+        gpio_put(MUX_OFF, 1);
 
-        sleep_ms(100);
+        sleep_us(100);
 
     }
 }
