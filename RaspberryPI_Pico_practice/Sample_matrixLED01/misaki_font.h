@@ -203,9 +203,6 @@ static const FontItem font_table[] = {
 // ➔ 配列全体のメモリサイズ（例: 100文字分なら 10バイト×100＝1000バイト）。
 // ●sizeof(FontItem) ➔ 構造体1個分のメモリサイズ（10バイト）。
 // 「全体サイズ ÷ 1個分のサイズ」で割ることで、文字数（100）がセットされる。
-// →なぜヘッダーファイルの上部で#ifndef MISAKI_FONT_H
-// なぜ#define MISAKI_FONT_Hの様に中身のないマクロ定義？が書かれていて、下部で再度
-// 定義をしているの？
 
 static const uint8_t font_blank[8] = {0};
 // ●万が一、フォントテーブルに存在しない文字（未登録の漢字など）が渡された時に
@@ -261,6 +258,26 @@ static inline const uint8_t* get_font_data(wchar_t code) {
     // その文法を利用して、この構造体や多重配列をひらめいたり、使用する方法を思い
     // 付けるのかと自問すると、とても出来ない、、、。それで少し落ち込む。
 }
+// ASCIIコード（char型）対応関数
+static inline const uint8_t* get_font_data_ascii(char ascii_code) {
+    // char 型を wchar_t 型へキャストして検索。
+    // ※日本語などの範囲外文字や未登録文字が渡された場合は自動で
+    //  forを抜けて、return font_blank が返ってくる。
+    return get_font_data((wchar_t)(unsigned char)ascii_code);
+    // ●なぜ一足飛びに (wchar_t) にせず、unsigned char を挟むのか？
+    // C言語の規格上、char 型が 「符号あり（-128 〜 127）」 として扱われるか、
+    // 「符号なし（0 〜 255）」 として扱われるかは、コンパイラやマイコン
+    // （CPUアーキテクチャ）など環境によって変わる。
+    // ●符号拡張（Sign Extension）によるバグの例
+    // 文字コード 0x80（10進数で 128）の文字が渡されたとする。
+    // 符号あり char の世界では、最上位ビットが 1 のため、これは負の数（-128）
+    // とみなされてしまう。
+    // これを直接大きな型である wchar_t（16bitや32bit）にキャストすると、
+    // C言語の自動補正でマイナスの値を維持しようとして 0xFF80 や 0xFFFFFF80
+    // （巨大な数値） に変化してしまう（これが符号拡張）※2の補数で負の数を表す為。
+    // その結果、0x0080（128）を検索したいのに 0xFF80 で探してしまい、
+    // 「文字が見つからない」となって全消灯してしまう。
+}
 
-#endif // MISAKI_FONT_H
-// ➔ここはどんな意味？
+#endif // MISAKI_FONT_H　MISAKI_FONT_H のインクルードガードを閉じている目印
+
