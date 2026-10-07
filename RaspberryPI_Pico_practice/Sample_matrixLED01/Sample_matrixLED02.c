@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <wchar.h>
 #include <string.h>
+#include <stdbool.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 
@@ -17,6 +18,8 @@
 #define MUX_C   18   // 74HC138 C
 
 #define SPI_PORT spi0
+
+
 
 // 表示させたいメッセージ（日本語・英数字ミックスOK）
 // C言語コンパイラに「文字」は「数値（文字コード）」に変換されるので、
@@ -278,8 +281,7 @@ int main()
                 {
                     for (uint8_t row = 0; row < 8; row++)
                     {   
-                        // 【修正後】上下（7 - row）と 左右（ビット反転関数の利用または反転）を合わせて渡す！
-                        // もし左右反転関数がある場合、または display_line 内で反転させている場合：
+                        // 【修正後】上下（7 - row）を渡す。
                         display_line(7 - row, display_buffer[row]);
 
                         // display_line(row, display_buffer[row]);
