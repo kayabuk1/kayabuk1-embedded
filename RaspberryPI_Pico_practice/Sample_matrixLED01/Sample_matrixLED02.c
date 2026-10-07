@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <wchar.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 
@@ -20,7 +21,10 @@
 // 表示させたいメッセージ（日本語・英数字ミックスOK）
 // C言語コンパイラに「文字」は「数値（文字コード）」に変換されるので、
 // そのまま文字列を入れる。
-static const wchar_t scroll_text[] = L" Hello Pico! こんにちは 12345 ";
+// ■ ↓ UTF-8使う場合は ASCII版をコメントアウトしてこちらを使用
+// static const wchar_t scroll_text[] = L" Hello Pico! こんにちは！";
+// ■ ↓ ASCIIコード版
+static const char scroll_text[] = " HELLO PICO! 12345 ";
 // ●「wchar_t(ワイド文字型)」日本語や各種言語の文字(Unicode)を、
 // C言語で普通のchar型の様に一文字ずつ扱える様する為の「大きな文字型」。
 // 日本語も英数字も、１文字＝１要素として均一に扱える様になる。
@@ -134,6 +138,15 @@ void display_line(uint8_t row, uint8_t line_data)
     // これにより、「今 5V が通電したアノード行」と「74HC595で 0V (LOW) に
     // 引き下げられたカソード列」の交差点にあるLEDだけが点灯する。
 }
+// -------------------------------------------------------------
+// ビット反転関数
+// -------------------------------------------------------------
+static inline uint8_t reverse_bits(uint8_t b) {
+    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4; // 4ビット単位（前半と後半）を入れ替え
+    b = (b & 0xCC) >> 2 | (b & 0x33) << 2; // 2ビットペアを入れ替え
+    b = (b & 0xAA) >> 1 | (b & 0x55) << 1; // 隣り合う1ビット同士を入れ替え
+    return b;
+}
 
 // -------------------------------------------------------------
 // メイン関数
@@ -174,7 +187,9 @@ int main()
     // 「書かれていない残りの要素は、すべて自動的に 0（または NULL）で初期化
     // しなければならない。
 
-    size_t text_length = wcslen(scroll_text);
+    // ■ASCII文字入力を使う場合は通常の strlen を使用する上行をONに
+    size_t text_length = strlen(scroll_text);
+    // size_t text_length = wcslen(scroll_text);
     // ●wcslen() 関数：
     // ワイド文字列の長さをワイド文字単位（文字数）で計算するC/C++の標準
     // ライブラリ関数。ここで20行目で指定した表示させたい、ワイド文字列の
@@ -188,10 +203,14 @@ int main()
         // 表示するメッセージから、0番目の文字（' '）、1番目の文字（'H'）、
         // 2番目の文字（'e'）…と、(文字列の長さ-1)まで1文字ずつ順番に
         // 処理対象を切り替える。
-        {
-            // 文字コードからフォントデータ（8バイト）を取得
+        {   
+            // 【修正後】ASCII対応関数を呼び出す
             const uint8_t *next_font 
-            = get_font_data(scroll_text[char_idx]);
+            = get_font_data_ascii(scroll_text[char_idx]);
+            // ■UTF-8版を使う場合は↑コードコメントアウトして↓コードを逆にコメント外す。
+            // 文字コードからフォントデータ（8バイト）を取得
+            // const uint8_t *next_font 
+            // = get_font_data(scroll_text[char_idx]);
             // ●get_font_data(...): 
             // 取り出した1文字（例: L'H'）を渡し、misaki_font.h の検索テーブルから、
             // その文字の8バイトLEDフォントデータへの先頭アドレス
@@ -255,11 +274,15 @@ int main()
                 }
 
                 // 1ドットシフトした状態でダイナミック点灯（表示スピード調整）
-                for (int frame = 0; frame < 6; frame++)
+                for (int frame = 0; frame < 18; frame++)
                 {
                     for (uint8_t row = 0; row < 8; row++)
-                    {
-                        display_line(row, display_buffer[row]);
+                    {   
+                        // 【修正後】上下（7 - row）と 左右（ビット反転関数の利用または反転）を合わせて渡す！
+                        // もし左右反転関数がある場合、または display_line 内で反転させている場合：
+                        display_line(7 - row, display_buffer[row]);
+
+                        // display_line(row, display_buffer[row]);
                         // ビット操作し作った表示行の点灯パターンを
                         //（表示行を選択＆その列の点灯パターンを）渡して点灯。
                         sleep_us(2000); // 2ms待機
