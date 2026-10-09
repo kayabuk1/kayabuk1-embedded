@@ -1,3 +1,9 @@
+/**
+ * @file Sample_matrixLED03_refactored.c
+ * @brief Raspberry Pi Pico 8x8 LEDマトリクス制御プログラム
+ * @details 74HC595(列カソード/SPI)および74HC138(行アノード/GPIO)を
+ * 用いたダイナミック点灯制御ライブラリ
+ */
 #include <stdio.h>
 #include <wchar.h>
 #include <string.h>
@@ -6,18 +12,16 @@
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 
-// ★ 更新した美咲フォントヘッダをインクルード
+// 美咲フォントヘッダのインクルード
 #include "misaki_font.h"
 
 // --- ピン割り当て定義 ---
 #define PIN_MOSI 7   // 74HC595 SER (データ)
 #define PIN_SCK  6   // 74HC595 SRCLK (クロック)
 #define PIN_RCK  3   // 74HC595 RCLK (ラッチ)
-
 #define MUX_A   20   // 74HC138 A
 #define MUX_B   19   // 74HC138 B
 #define MUX_C   18   // 74HC138 C
-
 #define SPI_PORT spi0
 
 #define ON true
@@ -30,36 +34,42 @@
 // 　1秒(1,000,000μs) ÷ 500Hz = 2,000μs ＝ 2ms
 // ●1行あたりの切り替え時間（sleep_us の値）
 // 　2,000μs ÷ 8行 = 250μs
-// 1行あたりの点灯時間（250μs）
-#define ROW_SCAN_TIME_US 250
+#define ROW_SCAN_TIME_US 250 /**< 1行あたりの点灯時間 (250us) */
 
-// 1フレーム（8行スキャン）にかかる時間を自動計算（ミリ秒）
-// (8行 × 250μs) ÷ 1000 ＝ ちょうど 2ms 
-#define FRAME_SCAN_TIME_MS ((8 * ROW_SCAN_TIME_US) / 1000)
+// ●1フレーム（8行スキャン）にかかる時間を自動計算（ミリ秒）
+// (8行 × 250μs) ÷ 1000 ＝  2ms 
+#define FRAME_SCAN_TIME_MS ((8 * ROW_SCAN_TIME_US) / 1000) /**< 1フレーム(8行)の走査時間 (2ms) */
 
 // デフォルト時間設定
-#define DEFAULT_RENDER_DURATION_MS 10000 // 10秒 (2ms×5000回スキャン)
-#define DEFAULT_BLINK_INTERVAL_MS 300   // 300ms (2ms×150回スキャン)
+#define DEFAULT_RENDER_DURATION_MS 10000 /**< デフォルト点灯保持時間 (10000ms = 10秒) */
+#define DEFAULT_BLINK_INTERVAL_MS   300   /**< デフォルト点滅間隔 (300ms) */
+#define DEFAULT_BLINK_TIMES        10    /**< デフォルト点滅回数 (10回) */
 
-// デフォルト点滅間隔
-#define DEFAULT_BLINK_TIMES 10
 
+// -------------------------------------------------------------
+// データ構造定義（共用体 union）
+// -------------------------------------------------------------
+uint32_t duration_ms = 0;
+uint32_t interval_ms = 0;
+uint8_t times = 0;
 
 // 原点 (0, 0)：画面の左上隅。
 // ■データ構造（共用体 union の活用）
 // union（共用体）を使うと、「8バイトの配列」としてもアクセスでき、
 // 同時に「(y, x) 座標の1ビット」としても直感的にアクセスできる
 // 構造体を作ることができるとのこと。
-// ●8ビット分のビットフィールド構造体（1行分）
+/**
+ * @brief 1行分(8ビット)のビットフィールド構造体
+ */
 typedef struct {
-    uint8_t x0 : 1;
-    uint8_t x1 : 1;
-    uint8_t x2 : 1;
-    uint8_t x3 : 1;
-    uint8_t x4 : 1;
-    uint8_t x5 : 1;
-    uint8_t x6 : 1;
-    uint8_t x7 : 1;
+    uint8_t x0 : 1; /**< 0列目(左端) */
+    uint8_t x1 : 1; /**< 1列目 */
+    uint8_t x2 : 1; /**< 2列目 */
+    uint8_t x3 : 1; /**< 3列目 */
+    uint8_t x4 : 1; /**< 4列目 */
+    uint8_t x5 : 1; /**< 5列目 */
+    uint8_t x6 : 1; /**< 6列目 */
+    uint8_t x7 : 1; /**< 7列目(右端) */
 } RowBits;
 // ・uint8_t x0 : 1; のように :（コロン）と数字を書くと、
 // 指定したビット数（ここでは1ビット）だけをその変数に割り当てる
@@ -70,19 +80,20 @@ typedef struct {
 // ・普通の構造体と同じように .（ドット）でアクセス可能。
 // ex：row[y].x0 = 1; // y行x0（0ビット目）に 1（点灯）をセット
 
-//■8x8 LEDフレームバッファ（共用体）
+/**
+ * @brief 8x8 LEDフレームバッファ共用体
+ * @details 8バイト一括(bytes)および (x,y)ビットアクセス(grid)を同じメモリで共有
+ */
 typedef union {
-    uint8_t bytes[8]; 
-    // SPI送信や行一括操作用の8バイト配列
-    RowBits grid[8];
-    // grid[y].x0 〜 grid.x7 で1ビットずつ直接アクセス！
+    uint8_t bytes[8]; /**< SPI送信・一括処理用の8バイト配列 */
+    RowBits grid[8]; /**< (x, y) 座標ビットフィールド配列。grid[y].x0 〜 grid.x7 で1ビットずつ直接アクセスする */
 } LEDBuffer;
 // ●共用体（union）は一つのメモリを色々な切り口で扱う。
-// 構造体（struct）: 
-    // メンバーごとにメモリが横に並ぶ（bytes[8] と grid[8] 
-    // で計 16 バイト消費する）
-// 共用体（union）: すべてのメンバーが全く同じメモリ空間（先頭アドレス）
-    // を共有して重なる（計 8 バイトしか消費しない）
+// ・構造体（struct）: 
+// メンバーごとにメモリが横に並ぶ（bytes[8] と grid[8] 
+// で計 16 バイト消費する）
+// ・共用体（union）: すべてのメンバーが全く同じメモリ空間（先頭アドレス）
+// を共有して重なる（計 8 バイトしか消費しない）
 // なので、RowBits型の配列を作って、grid[8]RowBits型が8個入るという形
 // にしたら、(y=2, x=3) の1ピクセルだけを点灯させたい時は
 // ・g_led_matrix.grid[2].x3 = 1;と言う形でアクセス出来る。
@@ -90,6 +101,10 @@ typedef union {
 // spi_write_blocking(SPI_PORT, &g_led_matrix.bytes[2], 1);
 // 　　　　　　　　　　　　　　　　↑ここが2行目の8ビットを指定
 
+/**
+ * @brief グローバル・フレームバッファ（下書き用キャンバス）の宣言と初期化
+ */
+static LEDBuffer g_led_matrix = { .bytes = {0} };
 // ■グローバルまたはモジュール内の基準バッファ
 // ●なぜLED制御でバッファ（フレームバッファ）が必要なのか？
 // もしバッファがなく、1ピクセル点灯させるたびに直接ハードウェア
@@ -97,31 +112,34 @@ typedef union {
 // 表示が崩れたりしてする。
 // そのため、マイコンのメモリ（SRAM）上に 
 // 「画面の下書き用キャンバス（LEDBuffer）」 を用意しておき：
-// 下書きフェーズ: プログラム上で1ピクセルつけたり、
-    // 文字をずらしたりして、バッファ上で次のコマの絵を完成させる。
-// 描画フェーズ: 完成したバッファのデータを、ダイナミック点灯
-    // （タイマーや繰り返し処理）で一気にLEDへ送り出して表示する。
-// このように、「画面のデータを作成する場所」 と
+// ・下書きフェーズ: プログラム上で1ピクセルつけたり、
+// 文字をずらしたりして、バッファ上で次のコマの絵を完成させる。
+// ・描画フェーズ: 完成したバッファのデータを、ダイナミック点灯
+// （タイマーや繰り返し処理）で一気にLEDへ送り出して表示する。
+// ・このように、「画面のデータを作成する場所」 と
 //  「LEDを物理的に光らせる場所」 を分けるための「下書き用メモリ領域」
 // だから バッファ と呼ばれている。
-static LEDBuffer g_led_matrix = { .bytes = {0} };
-// 指示付き初期化子（Designated Initializer）」 という文法。
+// ・{ .bytes = {0} }は指示付き初期化子（Designated Initializer）」という文法。
 // 共用体は複数のメンバーを持っているので、普通に {0} と書くだけだと
 // 「どのメンバーを初期化しているのか」が分からない。
 // .bytes = {0} と書くことで、共用体の中の .bytes 配列メンバーを
 // 指定して、全要素を 0（全消灯状態）で初期化の意味になる。
 
-
-// -------------------------------------------------------------
-// 表示させたい文字列を入れる配列
-// -------------------------------------------------------------
-// 表示させたいメッセージ（日本語・英数字ミックスOK）
-// C言語コンパイラに「文字」は「数値（文字コード）」に変換されるので、
-// そのまま文字列を入れる。
-// ■ ↓ UTF-8使う場合は ASCII版をコメントアウトしてこちらを使用
-// static const wchar_t scroll_text[] = L" Hello Pico! こんにちは！";
-// ■ ↓ ASCIIコード版
+/**
+ * @brief スクロール表示用サンプルテキスト※表示させたい文字列を入れる配列
+ * @note ■ ASCIIコード版
+ * @typed char
+ */
 static const char scroll_text[] = " HELLO PICO! 12345 ";
+/**
+ * @brief スクロール表示用サンプルテキスト
+ * @note ■ UTF-8 使う場合は ASCII版をコメントアウトしてこちらを使用
+ * @typed wchar_t　※型が異なるので注意
+ */
+// static const wchar_t scroll_text[] = L" Hello Pico! こんにちは！";
+
+// ※表示させたいメッセージ（日本語・英数字ミックスOK）
+// ●C言語コンパイラに「文字」は「数値（文字コード）」に変換されるので、そのまま文字列を入れる。
 // ●「wchar_t(ワイド文字型)」日本語や各種言語の文字(Unicode)を、
 // C言語で普通のchar型の様に一文字ずつ扱える様する為の「大きな文字型」。
 // 日本語も英数字も、１文字＝１要素として均一に扱える様になる。
@@ -129,11 +147,20 @@ static const char scroll_text[] = " HELLO PICO! 12345 ";
 // 伝えるサイン。
 // ●const ：変数やポインタの値を「読み取り専用（変更不可）」にする修飾子。
 
+// =============================================================
+// 0. ハードウェア直接制御層 (HAL / 内部ヘルパー関数)
+//    ※ GPIOやSPIを直接叩いてIC(74HC138/595)を物理操作する低レイヤー
+// =============================================================
 
+static inline uint8_t reverse_bits(uint8_t b);
+static inline void hw_matrix_select_active_row(uint8_t row);       
+static void        hw_matrix_output_line(uint8_t row, uint8_t line_data); 
 
-// -------------------------------------------------------------
-// ビット反転関数
-// -------------------------------------------------------------
+/**
+ * @brief 8ビットデータのLSD/MSBビット順逆転関数
+ * @param[in] b 対象の8ビットデータ
+ * @return ビット順が前後反転した8ビットデータ
+ */
 static inline uint8_t reverse_bits(uint8_t b) {
     b = (b & 0xF0) >> 4 | (b & 0x0F) << 4; // 4ビット単位（前半と後半）を入れ替え
     b = (b & 0xCC) >> 2 | (b & 0x33) << 2; // 2ビットペアを入れ替え
@@ -141,18 +168,12 @@ static inline uint8_t reverse_bits(uint8_t b) {
     return b;
 }
 
-// =============================================================
-// 0. ハードウェア直接制御層 (HAL / 内部ヘルパー関数)
-//    ※ GPIOやSPIを直接叩いてIC(74HC138/595)を物理操作する低レイヤー
-// =============================================================
-static inline void hw_matrix_select_active_row(uint8_t row);       
-    // 旧: select_active_row
-static void        hw_matrix_output_line(uint8_t row, uint8_t line_data); 
-    // 旧: display_line
 
-// -------------------------------------------------------------
-// 74HC138 (アノード行＝点灯行選択) 設定関数
-// -------------------------------------------------------------
+
+/**
+ * @brief 74HC138 (デコーダ/アノード行選択※点灯行選択) 出力設定関数
+ * @param[in] row 選択する行番号 (0 〜 7)
+ */
 static inline void hw_matrix_select_active_row(uint8_t row)
 // ●「static」静的修飾子：この関数を「この」C言語ファイル限定で使うという宣言。
 // これによって、他Cファイルとの名前衝突エラーを防ぐ。アクセス範囲（スコープ）の制限。
@@ -190,9 +211,12 @@ static inline void hw_matrix_select_active_row(uint8_t row)
     // 0 または 1 だけを取り出し、MUX_B()に1ビット目(2の位)のH/Lが取り込まれる。
 }
 
-// -------------------------------------------------------------
-// 1行分の描画関数
-// -------------------------------------------------------------
+/**
+ * @brief 1行分の物理信号出力関数（カソードデータSPI送信 ＋ アノード行有効化）
+ * @param[in] row 出力対象の物理行番号 (0 〜 7)
+ * @param[in] line_data 表示させる1行分(8ドット)の点灯パターン (1=ON, 0=OFF)
+ * @note カソード制御のため、内部でビット反転(~)を行って送信します。
+ */
 void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {   
     // ●uint8_t row: 表示対象の行番号（0 〜 7）。
@@ -245,8 +269,8 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
     // 1 マイクロ秒だけ待機。ICが「信号が変化した」と確実に認識するための
     // 最低限のパルス幅を確保。
 
-    // 行選択
-    hw_matrix_selct_active_row(row);
+    // 74HC138でアノード行を選択（通電・点灯開始）
+    hw_matrix_select_active_row(row);
     // ●行選択（アノード側の切り替え）
     // ●set_mux_row(row);
     // 上部に実装してある、アノード行選択用set_mux_row() 関数を呼び出し、
@@ -257,13 +281,50 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
     // 引き下げられたカソード列」の交差点にあるLEDだけが点灯する。
 }
 
+
+/**
+ * @brief ハードウェア初期化処理
+ */
+void init_hardware(void) {
+    stdio_init_all();
+
+    // SPI初期化 (100kHz)
+    spi_init(SPI_PORT, 100 * 1000);
+
+    // SPI通信(74HC595)用ピン機能設定
+    gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI); // 74HC595 SER (データ)※データ入力
+    gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI); // 74HC595 SRCLK (クロック)※データシフト
+    gpio_set_function(PIN_RCK,  GPIO_FUNC_SIO); // 74HC595 RCK (ラッチ)※データ確定
+
+    // 74HC138 MUXピン機能設定
+    gpio_set_function(MUX_A,    GPIO_FUNC_SIO); // 74HC138 A
+    gpio_set_function(MUX_B,    GPIO_FUNC_SIO); // 74HC138 B
+    gpio_set_function(MUX_C,    GPIO_FUNC_SIO); // 74HC138 C
+
+    // ピン方向を出力に設定
+    gpio_set_dir(PIN_RCK, GPIO_OUT);
+    gpio_set_dir(MUX_A,   GPIO_OUT);
+    gpio_set_dir(MUX_B,   GPIO_OUT);
+    gpio_set_dir(MUX_C,   GPIO_OUT);
+
+    gpio_put(PIN_RCK, 0);
+}
+
 // -------------------------------------------------------------
 // １．バッファ操作（ゲッター・セッター、全画操作など）モジュール
 // 　　※下書きキャンバス(g_led_matrix)」のみを変更するメモリ操作
 // -------------------------------------------------------------
-/** 
-// 1ピクセル（ビット）の点灯(1)/消灯(0)を設定
-*/
+
+void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off);
+bool led_buffer_get_pixel(uint8_t x, uint8_t y);
+void led_buffer_clear_all(void);
+
+/**
+ * @brief 1ピクセル(x, y)の点灯(ON)/消灯(OFF)をバッファにセットする関数
+ * @param[in] x X座標 (0 〜 7)
+ * @param[in] y Y座標 (0 〜 7)
+ * @param[in] on_off ON(true) または OFF(false)
+ */
 void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
     // 範囲外ガード（0〜7以外の値が入ってきたら何もしない）
     if (y >= 8 || x >= 8) return;
@@ -281,9 +342,12 @@ void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
     }
 }
 
-/** 
-// ：指定座標の1ピクセルの状態を取得
-*/
+/**
+ * @brief 指定座標(x, y)のピクセル状態を取得
+ * @param[in] x X座標 (0 〜 7)
+ * @param[in] y Y座標 (0 〜 7)
+ * @return 点灯していれば true, 消灯または範囲外なら false
+ */
 bool led_buffer_get_pixel(uint8_t x, uint8_t y){
     if (y >= 8 || x >= 8) return false;
     // 戻り値の型が boolのため、早期リターンも何かboolを返す必要がある。
@@ -300,12 +364,13 @@ bool led_buffer_get_pixel(uint8_t x, uint8_t y){
         // 0 は false、1（非ゼロ）は true に自動的に変換される。
         // x0（1ビット）しか入っていないので自動的にtrue/falseになる。
     }
+    return false; // ここに来ることはないが、コンパイラ警告回避のために追加
 }
 
 
-/** 
-// 全画面消灯（全ビット0）
-*/
+/**
+ * @brief フレームバッファの全消灯（クリア）
+ */
 void led_buffer_clear_all(void){
      for (int i = 0; i < 8; i++) {
         g_led_matrix.bytes[i] = 0x00; //0b0000 0000
@@ -313,18 +378,18 @@ void led_buffer_clear_all(void){
     }
 }
 
-/** 
-// 全画面点灯（全ビット1）
-*/
+/**
+ * @brief フレームバッファの全点灯（全ピクセルON）
+ */
 void led_buffer_fill_all(void){
      for (int i = 0; i < 8; i++) {
         g_led_matrix.bytes[i] = 0xFF; // 0b1111 1111
     }
 }
 
-/** 
-// 全画面の白黒（点灯/消灯）反転
-*/
+/**
+ * @brief フレームバッファの全画面白黒（点灯/消灯）反転
+ */
 void led_buffer_invert_all(void){
      for (int i = 0; i < 8; i++) {
         g_led_matrix.bytes[i] = ~g_led_matrix.bytes[i]; 
@@ -335,43 +400,104 @@ void led_buffer_invert_all(void){
 // -------------------------------------------------------------
 // ２．行・列（ライン）単位のバッファ操作
 // -------------------------------------------------------------
-// void led_buffer_set_row(uint8_t y, uint8_t row_data)：指定した1行に8ビットデータを書き込み
-// uint8_t led_buffer_get_row(uint8_t y)：指定した1行の8ビットデータを取得
-// void led_buffer_set_col(uint8_t x, uint8_t col_data)：指定した1列に8ビットデータを縦方向に書き込み
-// uint8_t led_buffer_get_col(uint8_t x)：指定した1列の8ビットデータを取得
+void led_buffer_set_row(uint8_t y, uint8_t row_data); //指定した1行に8ビットデータを書き込み
+uint8_t led_buffer_get_row(uint8_t y); //指定した1行の8ビットデータを取得
+void led_buffer_set_col(uint8_t x, uint8_t col_data);  //指定した1列に8ビットデータを縦方向に書き込み
+uint8_t led_buffer_get_col(uint8_t x); //指定した1列の8ビットデータを取得
+
+/**
+ * @brief 指定した1行(y行目)に8ビットデータを一括書き込み
+ * @param[in] y 行番号 (0 〜 7)
+ * @param[in] row_data 1行分の8ビットパターン
+ */
+void led_buffer_set_row(uint8_t y, uint8_t row_data) {
+    if (y >= 8) return;
+    g_led_matrix.bytes[y] = row_data;
+}
+
+/**
+ * @brief 指定した1行(y行目)の8ビットデータを取得
+ * @param[in] y 行番号 (0 〜 7)
+ * @return 1行分の8ビットデータ
+ */
+uint8_t led_buffer_get_row(uint8_t y) {
+    if (y >= 8) return 0;
+    return g_led_matrix.bytes[y];
+}
+
+/**
+ * @brief 指定した1列(x列目)に縦方向8ビットデータを一括書き込み
+ * @param[in] x 列番号 (0 〜 7)
+ * @param[in] col_data 縦1列分の8ビットパターン (bit0=y0 ... bit7=y7)
+ */
+void led_buffer_set_col(uint8_t x, uint8_t col_data) {
+    if (x >= 8) return;
+    for (uint8_t y = 0; y < 8; y++) {
+        bool state = (col_data >> y) & 0x01;
+        led_buffer_set_pixel(x, y, state);
+    }
+}
+
+/**
+ * @brief 指定した1列(x列目)の縦方向8ビットデータを取得
+ * @param[in] x 列番号 (0 〜 7)
+ * @return 縦1列分の8ビットデータ
+ */
+uint8_t led_buffer_get_col(uint8_t x) {
+    if (x >= 8) return 0;
+    uint8_t col_data = 0;
+    for (uint8_t y = 0; y < 8; y++) {
+        if (led_buffer_get_pixel(x, y)) {
+            col_data |= (1 << y);
+        }
+    }
+    return col_data;
+}
 
 // -------------------------------------------------------------
 // ３．シフト（移動）バッファ操作
 // -------------------------------------------------------------
-// void led_buffer_shift_rows(int offset)：画面全体を上下に offset ピクセル分シフト（正＝上、負＝下）
-// void led_buffer_shift_cols(int offset)：画面全体を左右に offset ピクセル分シフト（正＝左、負＝右）
+void led_buffer_shift_rows(int offset); // 画面全体を上下に offset ピクセル分シフト（正＝上、負＝下）
+void led_buffer_shift_cols(int offset); // 画面全体を左右に offset ピクセル分シフト（正＝左、負＝右）
+
+/**
+ * @brief 画面バッファ全体を1ピクセル左へ送り出し、右端列に新しい1列データを追加
+ * @param[in] new_col_data 右端(x=7列目)に追加挿入する縦1列分(8ドット)のデータ
+ */
+void led_buffer_shift_left_col(uint8_t new_col_data) {
+    for (uint8_t y = 0; y < 8; y++) {
+        uint8_t new_bit = (new_col_data >> y) & 0x01;
+        g_led_matrix.bytes[y] = (g_led_matrix.bytes[y] << 1) | new_bit;
+    }
+}
 
 // -------------------------------------------------------------
 //  ４．演出・重ね合わせ（合成）バッファ操作
 // -------------------------------------------------------------
-// void led_buffer_draw_pattern(const uint8_t pattern[8])
+void led_buffer_draw_pattern(const uint8_t pattern[8]);
 // ：指定した8×8ドット絵パターンを一括転写
-// void led_buffer_overlay_pattern(const uint8_t pattern[8], uint8_t mode)
+void led_buffer_overlay_pattern(const uint8_t pattern[8], uint8_t mode);
 // ：OR合成 / AND合成 / XOR合成でパターンを重ね合わせ（キャラと背景の衝突や重なり表現に便利！）
-// void led_buffer_rotate_90(void)：画面全体を90度時計回りに回転 ★追加案
+void led_buffer_rotate_90(void); //画面全体を90度時計回りに回転 
+
+
 
 // -------------------------------------------------------------
 // ５．点灯・タイミング制御などレンダラー（描画）関数群
 // ※ バッファの内容を500Hzのダイナミック点灯で物理LEDへ出力表示する
 // -------------------------------------------------------------
-// void led_render_blink(uint32_t interval_ms, uint8_t times)
-// :指定した間隔・回数で画面を点滅させる
-// void led_render_scan_once(void) //（1周スキャン関数）
-// 役割: 0行目〜7行目を1周だけダイナミック点灯させる最小単位の関数。
-// 1行につき 2ms × 8行 ＝ 約16ms（約1/60秒＝1コマ分）で処理が終わります。
-// void led_render_frame(uint32_t duration_ms) //（フレーム表示・静止保持関数）
-// 役割: led_scan_once() を指定された時間（ミリ秒）ぶんだけ
-// 何度も繰り返し呼び出して、画面の静止画を保持して描画する関数。
 
+void led_render_blink(uint32_t interval_ms, uint8_t times);
+void led_render_scan_once(void); 
+void led_render_frame(uint32_t duration_ms); 
+void led_render_scroll_text(const char *text, uint32_t step_delay_ms);
 
-// ① 最小単位：8行分を1周だけダイナミック点灯スキャンする関数
-// =「1画面描画（ダイナミック点灯）」基本関数
-// （1回の呼び出しで 2ms × 8行 ＝ 約16ms かかる）
+/**
+ * @brief 現在のバッファ状態を指定ミリ秒間だけ静止・連続点灯表示する関数
+ *（最小単位：8行分を1周だけ走査してダイナミック点灯スキャンする）
+ * つまり「1画面描画（ダイナミック点灯）」の基本関数
+ * @note  （1回の呼び出しで 2ms × 8行 ＝ 約16ms かかる）
+ */
 void led_render_scan_once(void) {
     for (uint8_t row = 0; row < 8; row++) {
         // 共用体バッファから最新の y=row 行目の8ビットデータ
@@ -385,11 +511,11 @@ void led_render_scan_once(void) {
 }
 
 /**
-* ② 指定した時間（duration_ms）の間、
-* 現在のバッファ状態を点灯表示する関数
-* ※1画面描画スキャン関数led_scan_onecを繰り返し呼んで
-* マトリクスLED全体の描画を指定時間維持する関数
-*/
+ * @brief 現在のバッファ状態を指定時間の（duration_ms）間だけ静止・連続点灯表示する関数。
+ * （現在のバッファ状態をそのまま点灯する）
+ * @param[in] duration_ms 点灯保持時間（ミリ秒）。0指定時はデフォルト(10秒)
+ * @note 桁あふれ（オーバーフロー）しないように、uint32_t型を渡します。
+ */
 void led_render_frame(uint32_t duration_ms) {
     if (duration_ms == 0) duration_ms = DEFAULT_RENDER_DURATION_MS;
     // 1回の scan_once に約16msかかるため、
@@ -423,21 +549,20 @@ void led_render_frame(uint32_t duration_ms) {
 }
 
 /**
- * 指定した間隔・回数で画面を点滅させる関数
+ * @brief 指定した間隔・回数で画面バッファの内容を点滅させる関数
+ * @param[in] interval_ms 点滅間隔（ミリ秒）。0指定時はデフォルト(300ms)
+ * @param[in] times 点滅回数。0指定時はデフォルト(10回)
  */
 void led_render_blink(uint32_t interval_ms, uint8_t times) {
-
     // 0 が指定された場合はデフォルト値（定数）を採用する
     if (interval_ms == 0) interval_ms = DEFAULT_BLINK_INTERVAL_MS;
     if (times == 0)       times = DEFAULT_BLINK_TIMES;
     // 現在のバッファ状態を一時退避するための退避用バッファ
     LEDBuffer backup = g_led_matrix;
-
     for (uint8_t i = 0; i < times; i++) {
         // 消灯状態を表示
         led_buffer_clear_all();
         led_render_frame(interval_ms);
-
         // 元の絵を復元して表示
         g_led_matrix = backup;
         led_render_frame(interval_ms);
@@ -459,29 +584,105 @@ void led_lender_test_one_by_one(void){
     }
 }
 
-// 4. 最初の実装ステップ（提案）
-// いきなり全部作るのではなく、一番基礎となる「1ビット点灯・消灯」から順番に積み上げていくのが一番確実に動作確認できます！
-// ステップ1: LEDBuffer 型の定義と、led_set_pixel(y, x, state) / led_get_pixel(y, x) の実装
-// ステップ2: led_clear_all() と led_set_row() の実装
-// ステップ3: これらを使った「1ピクセルずつ斜めに点灯していくアニメーション」を書いて動作テスト
-// ステップ4: シフト関数やパターン描画、点滅関数の追加
-// この設計・構成についてどう思われますか？ まずは「ステップ1：データ構造の定義と1ビット点灯・消灯関数（ゲッター/セッター）」のコード作成から始めてみますか？
+/**
+ * @brief 指定した文字列を1ドットずつスムーズに左スクロール表示する関数
+ * @param[in] text スクロール表示させる文字列(ASCII)
+ * @param[in] step_delay_ms 1ピクセル移動ごとの静止保持時間 (ミリ秒)
+ */
+void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
+    if (text == NULL) return;
+    size_t len = strlen(text);
 
+    for (size_t i = 0; i < len; i++) {
+        // フォントデータ(8バイト)の取得
+        const uint8_t *font_data = get_font_data_ascii(text[i]);
 
+        // 1文字(8列)分、1列ずつ取り出してバッファに挿入＆レンダリング
+        for (int col = 0; col < 8; col++) {
+            // 文字フォントから1列分(縦方向8ビット)を構成
+            uint8_t col_pattern = 0;
+            for (int row = 0; row < 8; row++) {
+                // (7 - col) でフォントの左端から抽出
+                uint8_t bit = (font_data[row] >> (7 - col)) & 0x01;
+                col_pattern |= (bit << row);
+            }
 
+            // バッファを1ピクセル左シフトし、新しい1列を追加
+            led_buffer_shift_left_col(col_pattern);
 
+            // 指定時間ぶんダイナミック点灯描画
+            led_render_frame(step_delay_ms);
+        }
+    }
+}
 
+// =============================================================
+// 個別単体テストモジュール関数群
+// =============================================================
 
+/**
+ * @brief 1ピクセル操作のテスト
+ */
+void test_pixel_control(void) {
+    led_buffer_clear_all();
+    led_buffer_set_pixel(0, 0, ON); // 左上
+    led_buffer_set_pixel(7, 7, ON); // 右下
+    led_render_frame(2000);
+}
 
+/**
+ * @brief 1マスずつ順番に打点していくアニメーションテスト
+ */
+void test_one_by_one_animation(void) {
+    led_buffer_clear_all();
+    for (uint8_t y = 0; y < 8; y++) {
+        for (uint8_t x = 0; x < 8; x++) {
+            led_buffer_set_pixel(x, y, ON);
+            led_render_frame(50); // 50msごとに1ドット増える
+        }
+    }
+}
 
+/**
+ * @brief 点滅制御のテスト
+ */
+void test_blink_control(void) {
+    led_buffer_fill_all();
+    led_render_frame(1000);
+    led_render_blink(0, 0); // デフォルト点滅
+}
 
+/**
+ * @brief 全単体テストの一括実行
+ */
+void run_all_unit_tests(void) {
+    test_pixel_control();
+    test_one_by_one_animation();
+    test_blink_control();
+}
 
+// =============================================================
+// メイン関数
+// =============================================================
+int main(void) {
+    // 1. ハードウェア初期化
+    init_hardware();
 
+    // 2. 単体テスト実行
+    run_all_unit_tests();
+
+    // 3. メインループ：電光掲示板のメッセージスクロール表示
+    while (true) {
+        // 1ピクセル送り速度 36ms でスクロール表示
+        led_render_scroll_text(scroll_text, 36);
+    }
+
+    return 0;
+}
 
 
 
 /* 一時コメントアウト
-
 // -------------------------------------------------------------
 // メイン関数
 // -------------------------------------------------------------
