@@ -292,6 +292,23 @@ bool led_get_pixel(uint8_t x, uint8_t y){
 }
 
 /** 
+// １マスずつ順番にビットセットする関数
+*/
+void one_by_one_turnon_led(void){
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            // 内部で switch(x) が働いて
+            // .x0 〜 .x7 へアクセスしてくれる
+            bool state = led_get_pixel(x, y); 
+            // 例: 点灯しているドットだけ反転させるなど
+            if (state == ON) {
+                led_set_pixel(x, y, OFF);
+            }
+        }
+    }
+}
+
+/** 
 // 全画面消灯（全ビット0）
 */
 void led_clear_all(void){
