@@ -207,7 +207,7 @@ static inline void set_mux_row(uint8_t row)
 // -------------------------------------------------------------
 // 1行分の描画関数 (ブランキング制御付き)
 // -------------------------------------------------------------
-void display_line(uint8_t row, uint8_t line_data)
+void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {
     // 1. まず消灯させてデータ更新中の残像・ぼやけを完全にシャットアウト
     gpio_put(MUX_OFF, 1);
@@ -278,7 +278,7 @@ int main()
                     uint8_t line_data = ~(*(p_pattern + row));
 
                     // 1行描画
-                    display_line(row, line_data);
+                    hw_matrix_output_line(row, line_data);
 
                     // 1行の表示時間 (1ms)
                     sleep_us(1000);

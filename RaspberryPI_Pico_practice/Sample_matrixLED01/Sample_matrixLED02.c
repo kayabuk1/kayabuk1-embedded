@@ -78,7 +78,7 @@ static inline void set_mux_row(uint8_t row)
 // -------------------------------------------------------------
 // 1行分の描画関数
 // -------------------------------------------------------------
-void display_line(uint8_t row, uint8_t line_data)
+void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {   
     // ●uint8_t row: 表示対象の行番号（0 〜 7）。
     // uint8_t line_data: その行に表示させたい 1行分（8ドット）のLED点灯パターン。
@@ -282,7 +282,7 @@ int main()
                     for (uint8_t row = 0; row < 8; row++)
                     {   
                         // 【修正後】上下（7 - row）を渡す。
-                        display_line(7 - row, display_buffer[row]);
+                        hw_matrix_output_line(7 - row, display_buffer[row]);
 
                         // display_line(row, display_buffer[row]);
                         // ビット操作し作った表示行の点灯パターンを
