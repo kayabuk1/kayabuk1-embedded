@@ -132,7 +132,7 @@ static const char scroll_text[] = " HELLO PICO! 12345 ";
 // -------------------------------------------------------------
 // 74HC138 (アノード行＝点灯行選択) 設定関数
 // -------------------------------------------------------------
-static inline void set_mux_row(uint8_t row)
+static inline void selct_active_row(uint8_t row)
 // ●「static」静的修飾子：この関数を「この」C言語ファイル限定で使うという宣言。
 // これによって、他Cファイルとの名前衝突エラーを防ぐ。アクセス範囲（スコープ）の制限。
 // 変数にstaticを付ける場合と、関数にstaticを付ける場合とで意味が異なる。
@@ -225,7 +225,7 @@ void display_line(uint8_t row, uint8_t line_data)
     // 最低限のパルス幅を確保。
 
     // 行選択
-    set_mux_row(row);
+    selct_active_row(row);
     // ●行選択（アノード側の切り替え）
     // ●set_mux_row(row);
     // 上部に実装してある、アノード行選択用set_mux_row() 関数を呼び出し、
@@ -248,7 +248,7 @@ static inline uint8_t reverse_bits(uint8_t b) {
 
 
 // -------------------------------------------------------------
-// １．基本操作（ゲッター・セッター、全画操作など）モジュール
+// １．バッファ操作（ゲッター・セッター、全画操作など）モジュール
 // -------------------------------------------------------------
 /** 
 // 1ピクセル（ビット）の点灯(1)/消灯(0)を設定
@@ -291,22 +291,6 @@ bool led_get_pixel(uint8_t x, uint8_t y){
     }
 }
 
-/** 
-// １マスずつ順番にビットセットする関数
-*/
-void one_by_one_turnon_led(void){
-    for (int y = 0; y < 8; y++) {
-        for (int x = 0; x < 8; x++) {
-            // 内部で switch(x) が働いて
-            // .x0 〜 .x7 へアクセスしてくれる
-            bool state = led_get_pixel(x, y); 
-            // 例: 点灯しているドットだけ反転させるなど
-            if (state == ON) {
-                led_set_pixel(x, y, OFF);
-            }
-        }
-    }
-}
 
 /** 
 // 全画面消灯（全ビット0）
@@ -361,7 +345,7 @@ void led_invert_all(void){
 // void led_rotate_90(void)：画面全体を90度時計回りに回転 ★追加案
 
 // -------------------------------------------------------------
-// ５．点灯・タイミング制御（レンダラー）
+// ５．点灯・タイミング制御など描画関数群（レンダラー）
 // -------------------------------------------------------------
 // void led_render_frame(uint32_t duration_ms)
 // ：現在のバッファ状態を duration_ms ミリ秒間だけダイナミック点灯表示する
@@ -377,8 +361,9 @@ void led_invert_all(void){
 
 
 // ① 最小単位：8行分を1周だけダイナミック点灯スキャンする関数
+// =「1画面描画（ダイナミック点灯）」基本関数
 // （1回の呼び出しで 2ms × 8行 ＝ 約16ms かかる）
-void led_scan_once(void) {
+void led_render_frame_once(void) {
     for (uint8_t row = 0; row < 8; row++) {
         // 共用体バッファから最新の y=row 行目の8ビットデータ
         // （0b...）を直接参照
@@ -389,12 +374,15 @@ void led_scan_once(void) {
         sleep_us(ROW_SCAN_TIME_US);
     }
 }
-/*
-// ② 指定した時間（duration_ms）の間、
-// 現在のバッファ状態を点灯表示する関数
+
+/**
+* ② 指定した時間（duration_ms）の間、
+* 現在のバッファ状態を点灯表示する関数
+* ※1画面描画スキャン関数led_scan_onecを繰り返し呼んで
+* マトリクスLED全体の描画を指定時間維持する関数
 */
 void led_render_frame(uint32_t duration_ms) {
-        if (duration_ms == 0) duration_ms = DEFAULT_RENDER_DURATION_MS;
+    if (duration_ms == 0) duration_ms = DEFAULT_RENDER_DURATION_MS;
     // 1回の scan_once に約16msかかるため、
     // 経過時間を計算しながらループする
     uint32_t elapsed_ms = 0;
@@ -409,13 +397,15 @@ void led_render_frame(uint32_t duration_ms) {
     
     // 指定された時間（duration_ms）に達するまでスキャンを繰り返す
     while (elapsed_ms < duration_ms) {
-        led_scan_once();
+        led_render_frame_once();
         elapsed_ms += FRAME_SCAN_TIME_MS; // 1周で約16ms経過
     }
 }
 
-// ③ 指定した間隔・回数で画面を点滅させる関数
-void led_blink(uint32_t interval_ms, uint8_t times) {
+/**
+ * 指定した間隔・回数で画面を点滅させる関数
+ */
+void led_render_blink(uint32_t interval_ms, uint8_t times) {
 
     // 0 が指定された場合はデフォルト値（定数）を採用する
     if (interval_ms == 0) interval_ms = DEFAULT_BLINK_INTERVAL_MS;
@@ -431,6 +421,21 @@ void led_blink(uint32_t interval_ms, uint8_t times) {
         // 元の絵を復元して表示
         g_led_matrix = backup;
         led_render_frame(interval_ms);
+    }
+}
+
+/**
+ * 1ドットずつ順番に点灯していくテストアニメーション関数
+ */
+void test_ne_by_one_turnon_animation(void){
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            // 内部で switch(x) が働いて
+            // .x0 〜 .x7 へアクセスして(x,y)LEDに１をセット
+            led_set_pixel(x, y, ON);
+            // 2. そのバッファ状態を 100ms 間ダイナミック点灯表示する！
+            led_render_frame(100);
+        }
     }
 }
 
@@ -659,7 +664,7 @@ void test_blink_control(void) {
     led_render_frame(1000);
     
     // デフォルト値 (0, 0) で点滅テスト！
-    led_blink(0, 0); 
+    led_render_blink(0, 0); 
 }
 
 // すべての単体テストを一括実行するまとめ関数
