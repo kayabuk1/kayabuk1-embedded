@@ -1,3 +1,8 @@
+
+-2026-10-12追記
+現在授業内で取り組んでいるマトリクスLEDの点灯コードフォルダは↓になります。
+https://github.com/kayabuk1/kayabuk1-embedded/tree/main/RaspberryPI_Pico_practice/Sample_matrixLED01
+
 # kayabuk1-embedded: 自律型ライントレーサー開発練習
 
 ## 概要 (Overview)
@@ -29,6 +34,4 @@
 - **クランクでのコースアウトとチャタリング（エラー19・23）:**
   車体が斜めのまま直進してコースアウトを繰り返す現象に対し、ラインを発見した直後に「車体が線と平行になるまで向きを揃える状態（アライメント・フェーズ）」をFSMに追加し、姿勢を整えてから前進するように改善しました。
 
--2026-10-12現在授業内で取り組んでいるマトリクスLEDの点灯コードフォルダは↓になります。
-https://github.com/kayabuk1/kayabuk1-embedded/tree/main/RaspberryPI_Pico_practice/Sample_matrixLED01
 
