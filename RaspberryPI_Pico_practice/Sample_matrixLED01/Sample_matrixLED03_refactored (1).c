@@ -68,7 +68,7 @@ typedef struct {
 typedef union {
     uint8_t bytes[8]; /**< SPI送信・一括処理用 8バイト配列 */
     RowBits grid[8];  /**< (x, y) 座標ビットフィールド配列 */
-} LEDBuffer;
+} LEDBuffer_t;
 
 /**
  * @brief グローバル・フレームバッファ（下書き用キャンバス）
@@ -274,6 +274,7 @@ uint8_t led_buffer_get_col(uint8_t x) {
     uint8_t col_data = 0;
     for (uint8_t y = 0; y < 8; y++) {
         if (led_buffer_get_pixel(x, y)) {
+        	
             col_data |= (1 << y);
         }
     }

@@ -62,7 +62,7 @@ typedef struct {
 typedef union {
     uint8_t bytes[8]; /**< SPI送信・一括処理用 8バイト配列 */
     RowBits grid[8];  /**< (x, y) 座標ビットフィールド配列 */
-} LEDBuffer;
+} LEDBuffer_t;
 
 /**
  * @brief グローバル・フレームバッファ（下書き用キャンバス）

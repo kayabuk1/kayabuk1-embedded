@@ -25,7 +25,12 @@
 #define SPI_PORT spi0
 
 #define ON true
-#define OFF false 
+#define OFF false
+
+// 合成モード定義
+#define OVERLAY_MODE_OR   0 /**< OR合成 (重ね合わせ) */
+#define OVERLAY_MODE_AND  1 /**< AND合成 (マスク・和集合) */
+#define OVERLAY_MODE_XOR  2 /**< XOR合成 (反転重ね合わせ) */
 
 // -------------------------------------------------------------
 // タイマー・周波数に関する定数定義 (500Hz 設定)
@@ -44,7 +49,7 @@
 #define DEFAULT_RENDER_DURATION_MS 10000 /**< デフォルト点灯保持時間 (10000ms = 10秒) */
 #define DEFAULT_BLINK_INTERVAL_MS   300   /**< デフォルト点滅間隔 (300ms) */
 #define DEFAULT_BLINK_TIMES        10    /**< デフォルト点滅回数 (10回) */
-
+#define DEFAULT_SCROLL_STEP_MS     36    /**< デフォルト1ドット送り速度 (36ms) */
 
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
@@ -87,7 +92,17 @@ typedef struct {
 typedef union {
     uint8_t bytes[8]; /**< SPI送信・一括処理用の8バイト配列 */
     RowBits grid[8]; /**< (x, y) 座標ビットフィールド配列。grid[y].x0 〜 grid.x7 で1ビットずつ直接アクセスする */
-} LEDBuffer;
+} LEDBuffer_t;
+// マトリクスLED左上が原点（型番印刷側面を下とした時）
+//     左上 x 0     1    2    3    4    5    6    7
+// bytes[y]0 [0].x0,[0].x1
+// bytes[y]1 [1].x0,[1].x1...
+// bytes[y]2
+// bytes[y]3
+// bytes[y]4
+// bytes[y]5
+// bytes[y]6
+// bytes[y]7
 // ●共用体（union）は一つのメモリを色々な切り口で扱う。
 // ・構造体（struct）: 
 // メンバーごとにメモリが横に並ぶ（bytes[8] と grid[8] 
@@ -96,15 +111,15 @@ typedef union {
 // を共有して重なる（計 8 バイトしか消費しない）
 // なので、RowBits型の配列を作って、grid[8]RowBits型が8個入るという形
 // にしたら、(y=2, x=3) の1ピクセルだけを点灯させたい時は
-// ・g_led_matrix.grid[2].x3 = 1;と言う形でアクセス出来る。
+// ・led_matrix_buffer.grid[2].x3 = 1;と言う形でアクセス出来る。
 // ・SPI送信で2行目の8ビットを一括送信したい時（そのまま渡せる）
-// spi_write_blocking(SPI_PORT, &g_led_matrix.bytes[2], 1);
+// spi_write_blocking(SPI_PORT, &led_matrix_buffer.bytes[2], 1);
 // 　　　　　　　　　　　　　　　　↑ここが2行目の8ビットを指定
 
 /**
  * @brief グローバル・フレームバッファ（下書き用キャンバス）の宣言と初期化
  */
-static LEDBuffer g_led_matrix = { .bytes = {0} };
+static LEDBuffer_t led_matrix_buffer = { .bytes = {0} };
 // ■グローバルまたはモジュール内の基準バッファ
 // ●なぜLED制御でバッファ（フレームバッファ）が必要なのか？
 // もしバッファがなく、1ピクセル点灯させるたびに直接ハードウェア
@@ -312,7 +327,7 @@ void init_hardware(void) {
 
 // -------------------------------------------------------------
 // １．バッファ操作（ゲッター・セッター、全画操作など）モジュール
-// 　　※下書きキャンバス(g_led_matrix)」のみを変更するメモリ操作
+// 　　※下書きキャンバス(led_matrix_buffer)」のみを変更するメモリ操作
 // -------------------------------------------------------------
 
 void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off);
@@ -331,14 +346,14 @@ void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
     // ビットフィールドメンバには配列に
     // x の値（0〜7）に応じて、対応するビットフィールドメンバに直接代入
     switch (x) {
-        case 0: g_led_matrix.grid[y].x0 = on_off; break;
-        case 1: g_led_matrix.grid[y].x1 = on_off; break;
-        case 2: g_led_matrix.grid[y].x2 = on_off; break;
-        case 3: g_led_matrix.grid[y].x3 = on_off; break;
-        case 4: g_led_matrix.grid[y].x4 = on_off; break;
-        case 5: g_led_matrix.grid[y].x5 = on_off; break;
-        case 6: g_led_matrix.grid[y].x6 = on_off; break;
-        case 7: g_led_matrix.grid[y].x7 = on_off; break;
+        case 0: led_matrix_buffer.grid[y].x0 = on_off; break;
+        case 1: led_matrix_buffer.grid[y].x1 = on_off; break;
+        case 2: led_matrix_buffer.grid[y].x2 = on_off; break;
+        case 3: led_matrix_buffer.grid[y].x3 = on_off; break;
+        case 4: led_matrix_buffer.grid[y].x4 = on_off; break;
+        case 5: led_matrix_buffer.grid[y].x5 = on_off; break;
+        case 6: led_matrix_buffer.grid[y].x6 = on_off; break;
+        case 7: led_matrix_buffer.grid[y].x7 = on_off; break;
     }
 }
 
@@ -352,14 +367,14 @@ bool led_buffer_get_pixel(uint8_t x, uint8_t y){
     if (y >= 8 || x >= 8) return false;
     // 戻り値の型が boolのため、早期リターンも何かboolを返す必要がある。
     switch (x) {
-        case 0: return g_led_matrix.grid[y].x0;
-        case 1: return g_led_matrix.grid[y].x1;
-        case 2: return g_led_matrix.grid[y].x2;
-        case 3: return g_led_matrix.grid[y].x3;
-        case 4: return g_led_matrix.grid[y].x4;
-        case 5: return g_led_matrix.grid[y].x5;
-        case 6: return g_led_matrix.grid[y].x6;
-        case 7: return g_led_matrix.grid[y].x7;
+        case 0: return led_matrix_buffer.grid[y].x0;
+        case 1: return led_matrix_buffer.grid[y].x1;
+        case 2: return led_matrix_buffer.grid[y].x2;
+        case 3: return led_matrix_buffer.grid[y].x3;
+        case 4: return led_matrix_buffer.grid[y].x4;
+        case 5: return led_matrix_buffer.grid[y].x5;
+        case 6: return led_matrix_buffer.grid[y].x6;
+        case 7: return led_matrix_buffer.grid[y].x7;
         // stdbool.h の設定で関数の戻り値型が bool の場合、
         // 0 は false、1（非ゼロ）は true に自動的に変換される。
         // x0（1ビット）しか入っていないので自動的にtrue/falseになる。
@@ -373,7 +388,7 @@ bool led_buffer_get_pixel(uint8_t x, uint8_t y){
  */
 void led_buffer_clear_all(void){
      for (int i = 0; i < 8; i++) {
-        g_led_matrix.bytes[i] = 0x00; //0b0000 0000
+        led_matrix_buffer.bytes[i] = 0x00; //0b0000 0000
         // 共有体の8ビットごと扱えるbytes[]でアクセスして全部0に。
     }
 }
@@ -383,7 +398,7 @@ void led_buffer_clear_all(void){
  */
 void led_buffer_fill_all(void){
      for (int i = 0; i < 8; i++) {
-        g_led_matrix.bytes[i] = 0xFF; // 0b1111 1111
+        led_matrix_buffer.bytes[i] = 0xFF; // 0b1111 1111
     }
 }
 
@@ -392,7 +407,7 @@ void led_buffer_fill_all(void){
  */
 void led_buffer_invert_all(void){
      for (int i = 0; i < 8; i++) {
-        g_led_matrix.bytes[i] = ~g_led_matrix.bytes[i]; 
+        led_matrix_buffer.bytes[i] = ~led_matrix_buffer.bytes[i]; 
         // 全ビット反転
     }
 }
@@ -408,11 +423,11 @@ uint8_t led_buffer_get_col(uint8_t x); //指定した1列の8ビットデータ�
 /**
  * @brief 指定した1行(y行目)に8ビットデータを一括書き込み
  * @param[in] y 行番号 (0 〜 7)
- * @param[in] row_data 1行分の8ビットパターン
+ * @param[in] row_data 1行分の8ビットパターン ex0b1010_1111
  */
 void led_buffer_set_row(uint8_t y, uint8_t row_data) {
     if (y >= 8) return;
-    g_led_matrix.bytes[y] = row_data;
+    led_matrix_buffer.bytes[y] = row_data;
 }
 
 /**
@@ -422,19 +437,24 @@ void led_buffer_set_row(uint8_t y, uint8_t row_data) {
  */
 uint8_t led_buffer_get_row(uint8_t y) {
     if (y >= 8) return 0;
-    return g_led_matrix.bytes[y];
+    return led_matrix_buffer.bytes[y];
 }
 
 /**
  * @brief 指定した1列(x列目)に縦方向8ビットデータを一括書き込み
  * @param[in] x 列番号 (0 〜 7)
- * @param[in] col_data 縦1列分の8ビットパターン (bit0=y0 ... bit7=y7)
+ * @param[in] col_data 縦1列分の8ビットパターン (bit0=y0x0... bit7=y7x0)
  */
 void led_buffer_set_col(uint8_t x, uint8_t col_data) {
     if (x >= 8) return;
     for (uint8_t y = 0; y < 8; y++) {
         bool state = (col_data >> y) & 0x01;
         led_buffer_set_pixel(x, y, state);
+        // ex:x=3,coldate=0b0110_1010の時
+        // y=3ループ目、3bit⇒シフトして0b0000_1101、0b0000_0001と論理積
+        // ⇒yビット目だけの状態(0 or 1)を取り出せる。
+        // それをLEDバッファの1ピクセルにセットする。
+        // これを縦一列分続ける。
     }
 }
 
@@ -448,7 +468,13 @@ uint8_t led_buffer_get_col(uint8_t x) {
     uint8_t col_data = 0;
     for (uint8_t y = 0; y < 8; y++) {
         if (led_buffer_get_pixel(x, y)) {
+            // LEDブッファの1ピクセルの状態が点灯ならif内処理
             col_data |= (1 << y);
+            // y0,y1,y2=offで非実行でy3=onなら、
+            // ビット論理和代入演算子でcol_data自身と、y=3なので、
+            // 1＝0001を3bit(y分)ずらして1000=8。これとcol_dateの
+            // 論理和0b0000_0000,0b0000_1000で0b0000_1000がcoldateにセット
+            // これを縦一列分繰り返して返す。
         }
     }
     return col_data;
@@ -457,17 +483,113 @@ uint8_t led_buffer_get_col(uint8_t x) {
 // -------------------------------------------------------------
 // ３．シフト（移動）バッファ操作
 // -------------------------------------------------------------
-void led_buffer_shift_rows(int offset); // 画面全体を上下に offset ピクセル分シフト（正＝上、負＝下）
-void led_buffer_shift_cols(int offset); // 画面全体を左右に offset ピクセル分シフト（正＝左、負＝右）
+void led_buffer_shift_cols(int offset_times); 
+// 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
+void led_buffer_shift_rows(int offset_times); 
+// 画面全体を上下に offset_times ピクセル分シフト（正＝上、負＝下）
+void led_buffer_shift_left_col(uint8_t new_rightend_col_data);
+void led_buffer_shift_righ_col(uint8_t new_leftend_col_data);
 
 /**
- * @brief 画面バッファ全体を1ピクセル左へ送り出し、右端列に新しい1列データを追加
- * @param[in] new_col_data 右端(x=7列目)に追加挿入する縦1列分(8ドット)のデータ
+ * @brief 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
+ * @param[in] offset_times シフトドット数 (正の値で左シフト、負の値で右シフト)
  */
-void led_buffer_shift_left_col(uint8_t new_col_data) {
+void led_buffer_shift_cols(int offset_times) {
+    if (offset_times == 0) return;
+
+    if (offset_times > 0) { // 左シフト (x0方向へ詰める)
+        for (uint8_t y = 0; y < 8; y++) {
+            led_matrix_buffer.bytes[y] 
+            = led_matrix_buffer.bytes[y] << offset_times;
+        }
+    } else { // 右シフト (x7方向へ詰める)
+        int abs_offset_times = -offset_times;
+        for (uint8_t y = 0; y < 8; y++) {
+            led_matrix_buffer.bytes[y] 
+            = led_matrix_buffer.bytes[y] >> abs_offset_times;
+        }
+    }
+}
+
+/**
+ * @brief 画面全体を上下に offset_times ピクセル分シフト（正＝上、負＝下）
+ * @param[in] offset_times シフトドット数 (正の値で上シフト、負の値で下シフト)
+ */
+void led_buffer_shift_rows(int offset_times) {
+    if (offset_times == 0) return;
+
+    if (offset_times > 0) { // 上シフト (y=0方向へ移動、下端に0を補填)
+        for (int y = 0; y < 8; y++) {
+            if (y + offset_times < 8) {
+                // y方向(上)に3行シフトなら0+3=3。4,5,6,7の5回まで移動
+                led_matrix_buffer.bytes[y] 
+                = led_matrix_buffer.bytes[y + offset_times];
+                // 8bit横一列一括で扱う。0列目(最上が0,最下が7)
+                // 0列目を0+3列目で上書き。次ループ1列目に4列目を上書き。
+            } else {
+                // y+offset_times=8,9,10の残り下3列は全て0を詰める。
+                led_matrix_buffer.bytes[y] = 0x00;
+            }
+        }
+    } else { // 下シフト (y=7方向へ移動、上端に0を補填)
+        int abs_offset_times = -offset_times;
+        // 引数で受け取った負の値にマイナスを掛けてプラスにして絶対値に変換
+        for (int y = 7; y >= 0; y--) {
+            // 最大値のy=7から始め、yをデクリメントして行く。
+            if (y - abs_offset_times >= 0) {
+                // 入力が-3(下に3列シフト移動)なら、7-3=4>=0。
+                led_matrix_buffer.bytes[y] 
+                = led_matrix_buffer.bytes[y - abs_offset_times];
+                // 上から7列目を4列目データで上書き、
+                // 次ループ6列目を3列目データで上書き、5,2、4,1、
+                // 最後3列目データを0列目(最上列)データで上書き
+            } else {
+                led_matrix_buffer.bytes[y] = 0x00;
+                // そのあとは残った上の列2,1,0は0で埋める。
+            }
+        }
+    }
+}
+
+// 【画面上の配置】   [x0:左端]  [x1]  [x2]  [x3]  [x4]  [x5]  [x6]  [x7:右端]
+//                     │       │     │     │     │     │     │       │
+// 【C言語のビット】  bit 0   bit 1 bit 2 bit 3 bit 4 bit 5 bit 6   bit 7 (MSB)
+//                   (LSB/右)                                     (MSB/左)
+/**
+ * @brief 画面バッファ全体を1ピクセル左⇐へ送り出し、右⇒端列に新しい1列データを追加
+ * @param[in] new_rightend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
+ */
+void led_buffer_shift_left_col(uint8_t new_rightend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
-        uint8_t new_bit = (new_col_data >> y) & 0x01;
-        g_led_matrix.bytes[y] = (g_led_matrix.bytes[y] << 1) | new_bit;
+        uint8_t new_bit = (new_rightend_col_data >> y) & 0x01;
+        // 次の右端列データが0b1101_0011で5ループ目なら、
+        // (new_rightend_col_data >> y) & 0x01
+        // ⇒5シフトして0b0000_1101これと0b0000_0001の論理積で、
+        // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0001
+        led_matrix_buffer.bytes[y] 
+        = (led_matrix_buffer.bytes[y] >> 1) | (new_bit <<7);
+        // 5列目の8bitデータex:0b0111_1010⇐1シフトして0b1111_0100と論理和
+        // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
+        // これを7行分繰り返す。
+    }
+}
+
+/**
+ * @brief 画面バッファ全体を1ピクセル右⇒へ送り出し、左⇐端列に新しい1列データを追加
+ * @param[in] new_leftend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
+ */
+void led_buffer_shift_righ_col(uint8_t new_leftend_col_data) {
+    for (uint8_t y = 0; y < 8; y++) {
+        uint8_t new_bit = (new_leftend_col_data >> y) & 0x01;
+        // 次の右端列データが0b1101_1011で5ループ目なら、
+        // (new_rightend_col_data >> y) & 0x01
+        // ⇒5シフトして0b0000_1101これと0b1000_0000の論理積で、
+        // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0000
+        led_matrix_buffer.bytes[y] 
+        = (led_matrix_buffer.bytes[y] << 1) | new_bit;
+        // 5列目の8bitデータex:0b0111_1010⇒1シフトして0b0011_1101と論理和
+        // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
+        // これを7行分繰り返す。
     }
 }
 
@@ -480,7 +602,59 @@ void led_buffer_overlay_pattern(const uint8_t pattern[8], uint8_t mode);
 // ：OR合成 / AND合成 / XOR合成でパターンを重ね合わせ（キャラと背景の衝突や重なり表現に便利！）
 void led_buffer_rotate_90(void); //画面全体を90度時計回りに回転 
 
+/**
+ * @brief 指定した8x8ドット絵パターン(8バイト配列)を一括転写
+ * @param[in] pattern 8バイトのパターン配列
+ */
+void led_buffer_draw_pattern(const uint8_t pattern[8]) {
+    if (pattern == NULL) return;
+    for (int i = 0; i < 8; i++) {
+        led_matrix_buffer.bytes[i] = pattern[i];
+    }
+}
 
+/**
+ * @brief 指定した8x8ドット絵パターンを合成モード(OR/AND/XOR)で重ね合わせ
+ * @param[in] pattern 8バイトのパターン配列
+ * @param[in] mode 合成モード (OVERLAY_MODE_OR, OVERLAY_MODE_AND, OVERLAY_MODE_XOR)
+ */
+void led_buffer_overlay_pattern(const uint8_t pattern[8], uint8_t mode) {
+    if (pattern == NULL) return;
+
+    for (int i = 0; i < 8; i++) {
+        switch (mode) {
+            case OVERLAY_MODE_OR:
+                led_matrix_buffer.bytes[i] |= pattern[i];
+                break;
+            case OVERLAY_MODE_AND:
+                led_matrix_buffer.bytes[i] &= pattern[i];
+                break;
+            case OVERLAY_MODE_XOR:
+                led_matrix_buffer.bytes[i] ^= pattern[i];
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+/**
+ * @brief 画面全体を90度時計回りに回転
+ */
+void led_buffer_rotate_90(void) {
+    LEDBuffer_t temp = { .bytes = {0} };
+
+    for (uint8_t y = 0; y < 8; y++) {
+        for (uint8_t x = 0; x < 8; x++) {
+            // (x, y) ピクセルを取得し、回転先 (7-y, x) へ設定
+            bool bit = (led_matrix_buffer.bytes[y] >> x) & 0x01;
+            if (bit) {
+                temp.bytes[x] |= (1 << (7 - y));
+            }
+        }
+    }
+    led_matrix_buffer = temp;
+}
 
 // -------------------------------------------------------------
 // ５．点灯・タイミング制御などレンダラー（描画）関数群
@@ -491,6 +665,7 @@ void led_render_blink(uint32_t interval_ms, uint8_t times);
 void led_render_scan_once(void); 
 void led_render_frame(uint32_t duration_ms); 
 void led_render_scroll_text(const char *text, uint32_t step_delay_ms);
+void mode_ticker_board(const char *text);
 
 /**
  * @brief 現在のバッファ状態を指定ミリ秒間だけ静止・連続点灯表示する関数
@@ -502,7 +677,7 @@ void led_render_scan_once(void) {
     for (uint8_t row = 0; row < 8; row++) {
         // 共用体バッファから最新の y=row 行目の8ビットデータ
         // （0b...）を直接参照
-        uint8_t line_data = g_led_matrix.bytes[row];
+        uint8_t line_data = led_matrix_buffer.bytes[row];
         // 既存の1行描画関数を呼び出す（7 - row で上下反転も吸収）
         hw_matrix_output_line(7 - row, line_data);
         // 1行あたりの点灯保持時間（2000μs = 2ms）
@@ -558,13 +733,13 @@ void led_render_blink(uint32_t interval_ms, uint8_t times) {
     if (interval_ms == 0) interval_ms = DEFAULT_BLINK_INTERVAL_MS;
     if (times == 0)       times = DEFAULT_BLINK_TIMES;
     // 現在のバッファ状態を一時退避するための退避用バッファ
-    LEDBuffer backup = g_led_matrix;
+    LEDBuffer_t backup = led_matrix_buffer;
     for (uint8_t i = 0; i < times; i++) {
         // 消灯状態を表示
         led_buffer_clear_all();
         led_render_frame(interval_ms);
         // 元の絵を復元して表示
-        g_led_matrix = backup;
+        led_matrix_buffer = backup;
         led_render_frame(interval_ms);
     }
 }
@@ -616,6 +791,16 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
     }
 }
 
+/**
+ * @brief 電光掲示板モード（メッセージを常時無限ループスクロール表示）
+ * @param[in] text 表示メッセージ文字列
+ */
+void mode_ticker_board(const char *text) {
+    while (true) {
+        led_render_scroll_text(text, DEFAULT_SCROLL_STEP_MS);
+    }
+}
+
 // =============================================================
 // 個別単体テストモジュール関数群
 // =============================================================
@@ -644,6 +829,43 @@ void test_one_by_one_animation(void) {
 }
 
 /**
+ * @brief 単一1ドット掃引テスト（前のドットは消えて1つのドットが走る）
+ */
+void test_single_dot_sweep_animation(void) {
+    for (uint8_t y = 0; y < 8; y++) {
+        for (uint8_t x = 0; x < 8; x++) {
+            led_buffer_clear_all();
+            led_buffer_set_pixel(x, y, ON);
+            led_render_frame(50);
+        }
+    }
+}
+
+/**
+ * @brief パターン描画・合成・90度回転テスト
+ */
+void test_pattern_and_rotation(void) {
+    static const uint8_t heart_pattern[8] = {
+        0b00000000,
+        0b01100110,
+        0b11111111,
+        0b11111111,
+        0b01111110,
+        0b00111100,
+        0b00011000,
+        0b00000000
+    };
+
+    // 1. ハート型を描画
+    led_buffer_draw_pattern(heart_pattern);
+    led_render_frame(1500);
+
+    // 2. 90度回転
+    led_buffer_rotate_90();
+    led_render_frame(1500);
+}
+
+/**
  * @brief 点滅制御のテスト
  */
 void test_blink_control(void) {
@@ -653,11 +875,13 @@ void test_blink_control(void) {
 }
 
 /**
- * @brief 全単体テストの一括実行
+ * @brief 全単体テストの一括実行関数
  */
 void run_all_unit_tests(void) {
     test_pixel_control();
-    test_one_by_one_animation();
+    test_accumulate_dots_animation();
+    test_single_dot_sweep_animation();
+    test_pattern_and_rotation();
     test_blink_control();
 }
 
@@ -671,11 +895,8 @@ int main(void) {
     // 2. 単体テスト実行
     run_all_unit_tests();
 
-    // 3. メインループ：電光掲示板のメッセージスクロール表示
-    while (true) {
-        // 1ピクセル送り速度 36ms でスクロール表示
-        led_render_scroll_text(scroll_text, 36);
-    }
+    // 3. メインループ：電光掲示板モード（常時点灯スクロール）
+    mode_ticker_board(scroll_text);
 
     return 0;
 }
