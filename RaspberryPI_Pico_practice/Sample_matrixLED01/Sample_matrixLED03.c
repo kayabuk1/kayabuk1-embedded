@@ -1,3 +1,28 @@
+/*◆やることリスト（一部学習として身に着けておきたいことも含む）
+●動作トレースや原理などのコメントの追記修正
+★miskaiフォントの英数字が半角で幅が4前後で文字と文字間の空白が大きくなって
+　しまっている問題。
+●一部関数内ですでに作成した基本操作関数を使わずに処理している部分が無いか精査
+●reverse_bits関数が使われていない問題
+●表示したい点灯パターンを8*8の1コマとして、複数コマ配列で保持してそれを点灯
+●LEDバッファのポインタを作成
+●マルチバッファ制御の実装
+●ポインタ渡し
+●アロー演算子でのアクセス（.ではなくポインタで処理軽く）
+led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0でのアクセス
+●関数ポインタの作成と関数ポインタを渡しての処理の実行
+●ISR割り込み処理の実装。割り込み処理に何をさせるか(LED点灯画面更新？)
+●ISRに関数ポインタを渡して、コールバック処理の自由度を上げる。
+●ステートパターン（モード切替）の実装。
+
+●プログラムファイルの分割
+・グローバル変数を減らす。
+・内部的なデータおよび関数にstaticを付ける。
+・inline化が望ましい関数にはinlineを付ける。
+*/
+
+
+
 /**
  * @file Sample_matrixLED03_refactored.c
  * @brief Raspberry Pi Pico 8x8 LEDマトリクス制御プログラム
@@ -49,7 +74,7 @@
 #define DEFAULT_RENDER_DURATION_MS 10000 /**< デフォルト点灯保持時間 (10000ms = 10秒) */
 #define DEFAULT_BLINK_INTERVAL_MS   300   /**< デフォルト点滅間隔 (300ms) */
 #define DEFAULT_BLINK_TIMES        10    /**< デフォルト点滅回数 (10回) */
-#define DEFAULT_SCROLL_STEP_MS     36    /**< デフォルト1ドット送り速度 (36ms) */
+#define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (36ms) */
 
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
@@ -679,7 +704,9 @@ void led_render_scan_once(void) {
         // （0b...）を直接参照
         uint8_t line_data = led_matrix_buffer.bytes[row];
         // 既存の1行描画関数を呼び出す（7 - row で上下反転も吸収）
-        hw_matrix_output_line(7 - row, line_data);
+        // ✖ hw_matrix_output_line(7 - row, line_data);
+        // 修正: 7 - row をやめ、row を直接渡すことで上下反転バグを解消
+        hw_matrix_output_line(row, line_data);
         // 1行あたりの点灯保持時間（2000μs = 2ms）
         sleep_us(ROW_SCAN_TIME_US);
     }
@@ -818,7 +845,7 @@ void test_pixel_control(void) {
 /**
  * @brief 1マスずつ順番に打点していくアニメーションテスト
  */
-void test_one_by_one_animation(void) {
+void test_accumulate_dots_animation(void) {
     led_buffer_clear_all();
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
@@ -831,7 +858,7 @@ void test_one_by_one_animation(void) {
 /**
  * @brief 単一1ドット掃引テスト（前のドットは消えて1つのドットが走る）
  */
-void test_single_dot_sweep_animation(void) {
+void test_one_by_one_dot_animation(void) {
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
             led_buffer_clear_all();
@@ -880,7 +907,7 @@ void test_blink_control(void) {
 void run_all_unit_tests(void) {
     test_pixel_control();
     test_accumulate_dots_animation();
-    test_single_dot_sweep_animation();
+    test_one_by_one_dot_animation();
     test_pattern_and_rotation();
     test_blink_control();
 }

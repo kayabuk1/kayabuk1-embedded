@@ -389,7 +389,7 @@ void test_pixel_control(void) {
 /**
  * @brief 1マスずつ順番に打点していくアニメーションテスト
  */
-void test_one_by_one_animation(void) {
+void test_accumulate_dots_animation(void) {
     led_buffer_clear_all();
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
@@ -413,7 +413,7 @@ void test_blink_control(void) {
  */
 void run_all_unit_tests(void) {
     test_pixel_control();
-    test_one_by_one_animation();
+    test_accumulate_dots_animation();
     test_blink_control();
 }
 

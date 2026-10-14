@@ -519,7 +519,7 @@ void test_accumulate_dots_animation(void) {
 /**
  * @brief 単一1ドット掃引テスト（前のドットは消えて1つのドットが走る）
  */
-void test_single_dot_sweep_animation(void) {
+void test_one_by_one_dot_animation(void) {
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
             led_buffer_clear_all();
@@ -568,7 +568,7 @@ void test_blink_control(void) {
 void run_all_unit_tests(void) {
     test_pixel_control();
     test_accumulate_dots_animation();
-    test_single_dot_sweep_animation();
+    test_one_by_one_dot_animation();
     test_pattern_and_rotation();
     test_blink_control();
 }
