@@ -9,7 +9,7 @@
 ●コメントと実際の値が合っていない箇所の修正
 先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、関数の引数と同じ名前です。紛らわしいので削除できます。
 済●led_render_test_one_by_oneは「render」の誤字で、test_accumulate_dots_animationとほぼ同じ内容です。
-led_buffer_shift_righ_colも「right」の誤字です。
+led_buffer_shift_right_colも「right」の誤字です。
 ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。今の環境（GCC、ARM）では動きますが、移植性はありません。set_pixelは、switchの代わりにビット演算で書けます。
 ●README.md の作成 ＆ 実機動作のGIF/写真撮影
 ●回路構成、苦労したバグと解決法、美咲フォントのライセンス、AI活用の明記をまとめたドキュメント作成（面接でそのまま見せられる資料になります）。
@@ -575,7 +575,7 @@ void led_buffer_shift_cols(int offset_times);
 void led_buffer_shift_rows(int offset_times); 
 // 画面全体を上下に offset_times ピクセル分シフト（正＝上、負＝下）
 void led_buffer_shift_left_col(uint8_t new_rightend_col_data);
-void led_buffer_shift_righ_col(uint8_t new_leftend_col_data);
+void led_buffer_shift_right_col(uint8_t new_leftend_col_data);
 
 /**
  * @brief 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
@@ -641,7 +641,7 @@ void led_buffer_shift_rows(int offset_times) {
 // 【画面上の配置】   [x0:左端]  [x1]  [x2]  [x3]  [x4]  [x5]  [x6]  [x7:右端]
 //                     │       │     │     │     │     │     │       │
 // 【C言語のビット】  bit 0   bit 1 bit 2 bit 3 bit 4 bit 5 bit 6   bit 7 (MSB)
-//                   (LSB/右)                                     (MSB/左)
+//                   (LSB/左)                                     (MSB/右)
 /**
  * @brief 画面バッファ全体を1ピクセル左⇐へ送り出し、右⇒端列に新しい1列データを追加
  * @param[in] new_rightend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
@@ -665,7 +665,7 @@ void led_buffer_shift_left_col(uint8_t new_rightend_col_data) {
  * @brief 画面バッファ全体を1ピクセル右⇒へ送り出し、左⇐端列に新しい1列データを追加
  * @param[in] new_leftend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
  */
-void led_buffer_shift_righ_col(uint8_t new_leftend_col_data) {
+void led_buffer_shift_right_col(uint8_t new_leftend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         uint8_t new_bit = (new_leftend_col_data >> y) & 0x01;
         // 次の右端列データが0b1101_1011で5ループ目なら、
@@ -913,7 +913,7 @@ void test_pixel_control(void) {
 }
 
 /**
- * @brief 1マスずつ順番に打点していくアニメーションテスト
+ * @brief 1マスずつ順番に打点していくアニメーションテスト(累積)
  */
 void test_accumulate_dots_animation(void) {
     led_buffer_clear_all();
