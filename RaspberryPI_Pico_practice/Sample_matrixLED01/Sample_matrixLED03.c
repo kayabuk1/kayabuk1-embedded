@@ -17,6 +17,7 @@ set_pixelは、switchの代わりにビット演算で書けます。
 ただ、ビット演算はイメージがしにくい部分があるので、
 また授業で同級生にコードを配布する可能性があるので可読性の高いスイッチ文のコードを残しておいて、
 下にコメントの形で実装する。処理速度重視したくなったら下のコードをコメントアウトしてもらう。
+訓練校での環境は皆同じPicoなので問題ないと考える。
 
 ●README.md の作成 ＆ 実機動作のGIF/写真撮影
 ●回路構成、苦労したバグと解決法、美咲フォントのライセンス、AI活用の明記をまとめたドキュメント作成（面接でそのまま見せられる資料になります）。
@@ -590,28 +591,31 @@ void led_buffer_shift_rows(int offset_times);
 
 // 【画面上の配置】   [x0:左端]  [x1]  [x2]  [x3]  [x4]  [x5]  [x6]  [x7:右端]
 //                     │       │     │     │     │     │     │       │
-// 【C言語のビット】  bit 0   bit 1 bit 2 bit 3 bit 4 bit 5 bit 6   bit 7 (MSB)
+// 【C言語のビット】  bit0    bit1　bit2  bit3  bit4  bit5  bit6  bit7 (MSB)
 //                   (LSB/左)                                     (MSB/右)
 //  0b1 0 1 0 1 0 1 0 実際のビットの並びとLED画面への反映が反転しているので注意。
 //bit 7|6|5|4|3|2|1|0 番目
-
 /**
- * @brief 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
+ * @brief 画面全体を左右に offset_times ピクセル分シフト（正＝右へ、負＝左へ※左上原点）
  * @param[in] offset_times シフトドット数 (正の値で左シフト、負の値で右シフト)
  */
 void led_buffer_shift_cols(int offset_times) {
     if (offset_times == 0) return;
 
-    if (offset_times > 0) { // 左シフト (x0方向へ詰める)
+    if (offset_times > 0) { // 右シフト (x7方向へ詰める)
         for (uint8_t y = 0; y < 8; y++) {
             led_matrix_buffer.bytes[y] 
             = led_matrix_buffer.bytes[y] << offset_times;
+            // ex:offset_times=2、元行データ0b0110_1001なら、
+            // 0b⇐旧01|1010_01|新00⇐ これを8行分繰り返すと縦1列が横にシフトした様に見える。
         }
-    } else { // 右シフト (x7方向へ詰める)
+    } else { // 左シフト (x0方向へ詰める)
         int abs_offset_times = -offset_times;
         for (uint8_t y = 0; y < 8; y++) {
             led_matrix_buffer.bytes[y] 
             = led_matrix_buffer.bytes[y] >> abs_offset_times;
+            // ex:offset_times=-2、元行データ0b0110_1001なら、
+            // 0b⇒新00|01_10_10|旧01⇒ これを8行分繰り返すと縦1列が横にシフトした様に見える。
         }
     }
 }
