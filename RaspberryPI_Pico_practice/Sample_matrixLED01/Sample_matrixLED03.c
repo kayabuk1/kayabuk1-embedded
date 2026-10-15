@@ -81,10 +81,33 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 // ●1行あたりの切り替え時間（sleep_us の値）
 // 　2,000μs ÷ 8行 = 250μs
 #define ROW_SCAN_TIME_US 250 /**< 1行あたりの点灯時間 (250us) */
+//没 #define ROW_SCAN_TIME_US 250.0 /**< 1行あたりの点灯時間 (250us) */
+// Raspberry Pi Pico（RP2040）にはハードウェア浮動小数点演算器（FPU）が無い。
+// double や float を使うと、ソフトウェアで重い小数計算を行うライブラリが引き込まれ、
+// 処理スピードが遅くなるとのこと。
 
 // ●1フレーム（8行スキャン）にかかる時間を自動計算（ミリ秒）
 // (8行 × 250μs) ÷ 1000 ＝  2ms 
-#define FRAME_SCAN_TIME_MS ((8 * ROW_SCAN_TIME_US) / 1000) /**< 1フレーム(8行)の走査時間 (2ms) */
+// #没不要に define FRAME_SCAN_TIME_MS ((8 * ROW_SCAN_TIME_US) / 1000) /**< 1フレーム(8行)の走査時間 (2ms) */
+//没FPUが無い為。 #define FRAME_SCAN_TIME_MS (double)((double)(8 * ROW_SCAN_TIME_US) / 1000.0) /**< 1フレーム(8行)の走査時間 (2ms) */
+
+// // 没true条件に入れてしまうのも可能？
+// //    while ((time_us_32() - start_time) < duration_ms)これも可能？
+// uint32_t start_time = time_us_32()/1000;
+// uint32_t elapsed_ms = 0;
+// uint32_t end_time = 0;
+//     // 指定された時間（duration_ms）に達するまでスキャンを繰り返す
+//     while ((end_time - start_time) < duration_ms) {
+//         led_render_scan_once();
+//         end_time = time_us_32()/1000;
+//         // elapsed_ms += end_time - start_time;
+//         // elapsed_ms += FRAME_SCAN_TIME_MS; // 1周で約16ms経過
+//     }
+// }
+// // C言語の符号なし32ビット整数（uint32_t）で 0 - 10 を計算すると、数値がループして
+// // 4,294,967,286（約42億ミリ秒＝約49日） という巨大な値になる。結果一瞬でループ終了。
+// // while ループの直前で end_time = time_us_32() / 1000; または最初の1周を保証する
+// // do { ... } while (...); にする必要とのこと。
 
 // デフォルト時間設定
 #define DEFAULT_RENDER_DURATION_MS 10000 /**< デフォルト点灯保持時間 (10000ms = 10秒) */
@@ -752,38 +775,44 @@ void led_render_scan_once(void) {
 /**
  * @brief 現在のバッファ状態を指定時間の（duration_ms）間だけ静止・連続点灯表示する関数。
  * （現在のバッファ状態をそのまま点灯する）
- * @param[in] duration_ms 点灯保持時間（ミリ秒）。0指定時はデフォルト(10秒)
+ * @param[in] duration_ms 点灯保持時間（ミリ秒）。0指定時はデフォルト10000ms(10秒)
  * @note 桁あふれ（オーバーフロー）しないように、uint32_t型を渡します。
  */
 void led_render_frame(uint32_t duration_ms) {
     if (duration_ms == 0) duration_ms = DEFAULT_RENDER_DURATION_MS;
-    // 1回の scan_once に約16msかかるため、
-    // 経過時間を計算しながらループする
-    uint32_t elapsed_ms = 0;
     // 🔹 render（レンダリング / 描画）とは？
     // コンピュータグラフィックやマイコン制御における render は、
     // 「メモリ上のデータ（バッファ）をもとに、実際に画面やLEDへ出力・
-    // 描画する処理」 のことです。 つまり led_render... は
+    // 描画する処理」 のこと。 つまり led_render... は
     // 「バッファに描いた下書きを実際のLEDへ映し出す関数」という
-    // 意味になります。
+    // 意味。
     // 🔹 frame（フレーム）とは？
-    // パラパラマンガや動画の 「1コマの静止画」 のことです。
+    // パラパラマンガや動画の 「1コマの静止画」 のこと。
     // LEDマトリクス制御では、「ある一瞬に8×8のLED全体で
-    // 表示されている1枚の点灯パターン」 を1フレームと呼びます。
+    // 表示されている1枚の点灯パターン」 を1フレームと呼ぶ。
+     // 現在時刻から duration_ms ミリ秒後の「絶対終了時刻」を生成（Pico SDK標準関数）
+    // 内部でget_absolute_time() で取得した現在時刻に引数で渡したミリ秒数（ms）を加算して返す。
+    absolute_time_t end_time = make_timeout_time_ms(duration_ms);
+    
+    //没 uint32_t elapsed_ms = 0;
+    // 1回の scan_once に約16msかかるため、
+    // 経過時間を計算しながらループする
     // 🔹 なぜ duration_ms（表示時間）は uint32_t なのか？
     // duration ＝ 持続時間 / 表示する時間
     // ms ＝ ミリ秒（1/1000秒）
     // ミリ秒単位で「1秒（1000ms）」や「10秒（10000ms）」、
     // あるいは「1分（60000ms）」といった大きめの時間を指定したときに
-    // 桁あふれ（オーバーフロー）しないようにするためです。
+    // 桁あふれ（オーバーフロー）しないようにするため。
     // uint8_t（最大255＝約0.25秒までしか測れない）では不十分なため
     // 時間を扱う引数には uint32_t（最大約49日分までOK）を使うのが
-    // 標準的なルールです。
+    // 標準的なルール。
     
-    // 指定された時間（duration_ms）に達するまでスキャンを繰り返す
-    while (elapsed_ms < duration_ms) {
+    // 終了時刻に達するまでスキャンを繰り返す（time_reached関数で判定）
+    // • static bool time_reached(absolute_time_t t)
+    // • 引数: t（指定する絶対時刻／64bitタイマカウント値。1カウント＝1マイクロ秒）
+    // • 戻り値: bool（指定した時刻に到達していれば true、まだであれば false）
+    while (!time_reached(end_time)) {
         led_render_scan_once();
-        elapsed_ms += FRAME_SCAN_TIME_MS; // 1周で約16ms経過
     }
 }
 
