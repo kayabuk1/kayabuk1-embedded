@@ -4,7 +4,7 @@
 　しまっている問題。
 ★misakiフォントのクレジットを記載する。
 ●led_buffer_shift_colsの向きがコメントと逆
-●時間の計算が、定数を変えると止まる作り
+済●時間の計算が、定数を変えると止まる作り
 済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
 ●コメントと実際の値が合っていない箇所の修正
 先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、関数の引数と同じ名前です。紛らわしいので削除できます。
@@ -51,7 +51,7 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 #include <stdbool.h>
 #include <stdlib.h>
 #include "pico/stdlib.h"
-#include "hardware/spi.h"
+
 
 // 美咲フォントヘッダのインクルード
 #include "misaki_font.h"
@@ -60,9 +60,9 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 #define PIN_MOSI 7   // 74HC595 SER (データ)
 #define PIN_SCK  6   // 74HC595 SRCLK (クロック)
 #define PIN_RCK  3   // 74HC595 RCLK (ラッチ)
-#define MUX_A   20   // 74HC138 A
-#define MUX_B   19   // 74HC138 B
-#define MUX_C   18   // 74HC138 C
+#define DMUX_A   20   // 74HC138 A
+#define DMUX_B   19   // 74HC138 B
+#define DMUX_C   18   // 74HC138 C
 #define SPI_PORT spi0
 
 #define ON true
@@ -70,7 +70,7 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 
 // 合成モード定義
 #define OVERLAY_MODE_OR   0 /**< OR合成 (重ね合わせ) */
-#define OVERLAY_MODE_AND  1 /**< AND合成 (マスク・和集合) */
+#define OVERLAY_MODE_AND  1 /**< AND合成 (マスク・積集合) */
 #define OVERLAY_MODE_XOR  2 /**< XOR合成 (反転重ね合わせ) */
 
 // -------------------------------------------------------------
@@ -113,14 +113,11 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 #define DEFAULT_RENDER_DURATION_MS 10000 /**< デフォルト点灯保持時間 (10000ms = 10秒) */
 #define DEFAULT_BLINK_INTERVAL_MS   300   /**< デフォルト点滅間隔 (300ms) */
 #define DEFAULT_BLINK_TIMES        10    /**< デフォルト点滅回数 (10回) */
-#define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (36ms) */
+#define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (360ms) */
 
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
 // -------------------------------------------------------------
-uint32_t duration_ms = 0;
-uint32_t interval_ms = 0;
-uint8_t times = 0;
 
 // 原点 (0, 0)：画面の左上隅。
 // ■データ構造（共用体 union の活用）
@@ -294,19 +291,20 @@ static inline void hw_matrix_select_active_row(uint8_t row)
 // unsigned char型と同じサイズだが、8bit(1byte)サイズであることを「明示」する
 // 為にこちらを使う。「row」は点灯させたい行を受け取る変数。
 {
-    gpio_put(MUX_A, (row >> 0) & 0x01); // 0ビット目
-    gpio_put(MUX_B, (row >> 1) & 0x01); // 1ビット目
-    gpio_put(MUX_C, (row >> 2) & 0x01); // 2ビット目
+    gpio_put(DMUX_A, (row >> 0) & 0x01); // 0ビット目
+    gpio_put(DMUX_B, (row >> 1) & 0x01); // 1ビット目
+    gpio_put(DMUX_C, (row >> 2) & 0x01); // 2ビット目
     // ●74HC138との連携：74HC138は、3本のバイナリ入力端子(A,B,C)の「H/L」の
     // 組み合わせで8本の出力端子(Y0~Y7)のどれか「１つ」に「Low」を出力する、
-    // 3to8ラインデコーダ機能を持ったIC。マルチプレクサの1種。
-    // ●MUX_B（1ビット目＝2の位）の出力例
+    // 3to8ラインデコーダ機能を持ったIC。デマルチプレクサの1種。
+    // 多入力⇒少出力がマルチプレクサで、少入力⇒多出力がデマルチプレクサ。
+    // ●DMUX_B（1ビット目＝2の位）の出力例
     // row >> 1: 右に 1 ビットシフト（右に1つずらす）。
     // 例：3 (2進数 011) を右に1つずらすと 001 になり、
     // 欲しい「1ビット目」が一番右端へ移動 して来る。
     // ●& 0x01: ビットAND演算子：0x01（2進数で 00000001）と論理積をとることで、
     // 一番右（0ビット目）以外の余計な桁を全すべて0でマスク（消去） して、
-    // 0 または 1 だけを取り出し、MUX_B()に1ビット目(2の位)のH/Lが取り込まれる。
+    // 0 または 1 だけを取り出し、DMUX_B()に1ビット目(2の位)のH/Lが取り込まれる。
 }
 
 /**
@@ -319,7 +317,21 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {   
     // ●uint8_t row: 表示対象の行番号（0 〜 7）。
     // uint8_t line_data: その行に表示させたい 1行分（8ドット）のLED点灯パターン。
-    // 元データでは、1 ＝ 点灯（ON）、0 ＝ 消灯（OFF）という直感的なデータになっています。
+    // 元データでは、1 ＝ 点灯（ON）、0 ＝ 消灯（OFF）という直感的なデータになっている。
+
+    // 先に74HC138でアノード行を選択（点灯はまだ）
+    // hw_matrix_led_blanking消灯関数を実装して、この関数を呼び出して指定時間経過後、
+    // 消灯関数を必ず実行する様に修正したので、先に行選択しても意図しない行が点灯することは
+    // 無い。なので先に行を選ぶ。
+    hw_matrix_select_active_row(row);
+    // ●行選択（アノード側の切り替え）
+    // ●hw_matrix_select_active_row(row);
+    // 上部に実装してある、アノード行選択用hw_matrix_select_active_row() 関数を呼び出し、
+    // 74HC138（アノード側）へ指定した row（行番号）の信号を送る。
+    // 指定した行の PNP トランジスタが ON になり、
+    // その行のアノードに 5V が供給される。
+    // これにより、「今 5V が通電したアノード行」と「74HC595で 0V (LOW) に
+    // 引き下げられたカソード列」の交差点にあるLEDだけが点灯する。
 
     // ●カソード制御のためビット反転(~)
     // 74HC595はLEDカソード側を制御している＝LEDを点灯させるには、
@@ -366,17 +378,6 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
     // ●sleep_us(1) の役割:
     // 1 マイクロ秒だけ待機。ICが「信号が変化した」と確実に認識するための
     // 最低限のパルス幅を確保。
-
-    // 74HC138でアノード行を選択（通電・点灯開始）
-    hw_matrix_select_active_row(row);
-    // ●行選択（アノード側の切り替え）
-    // ●set_mux_row(row);
-    // 上部に実装してある、アノード行選択用set_mux_row() 関数を呼び出し、
-    // 74HC138（アノード側）へ指定した row（行番号）の信号を送る。
-    // 指定した行の PNP トランジスタが ON になり、
-    // その行のアノードに 5V が供給される。
-    // これにより、「今 5V が通電したアノード行」と「74HC595で 0V (LOW) に
-    // 引き下げられたカソード列」の交差点にあるLEDだけが点灯する。
 }
 
 
@@ -386,24 +387,27 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 void init_hardware(void) {
     stdio_init_all();
 
-    // SPI初期化 (100kHz)
-    spi_init(SPI_PORT, 100 * 1000);
+    // SPI初期化 (100kHz⇒1000kHzに変更)
+    spi_init(SPI_PORT, 1000 * 1000);
+    // ブランキングで1バイト送るたびに、SPIが100kHzだと約80µsかかります。
+    // そのぶん点灯時間が削られて暗くなります。spi_init(SPI_PORT, 1000 * 1000);
+    // （1MHz）に上げると約8µsで済みます。74HC595はこの速さでも問題なく動きます。とのこと。
 
     // SPI通信(74HC595)用ピン機能設定
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI); // 74HC595 SER (データ)※データ入力
     gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI); // 74HC595 SRCLK (クロック)※データシフト
     gpio_set_function(PIN_RCK,  GPIO_FUNC_SIO); // 74HC595 RCK (ラッチ)※データ確定
 
-    // 74HC138 MUXピン機能設定
-    gpio_set_function(MUX_A,    GPIO_FUNC_SIO); // 74HC138 A
-    gpio_set_function(MUX_B,    GPIO_FUNC_SIO); // 74HC138 B
-    gpio_set_function(MUX_C,    GPIO_FUNC_SIO); // 74HC138 C
+    // 74HC138 DMUXピン機能設定
+    gpio_set_function(DMUX_A,    GPIO_FUNC_SIO); // 74HC138 A
+    gpio_set_function(DMUX_B,    GPIO_FUNC_SIO); // 74HC138 B
+    gpio_set_function(DMUX_C,    GPIO_FUNC_SIO); // 74HC138 C
 
     // ピン方向を出力に設定
     gpio_set_dir(PIN_RCK, GPIO_OUT);
-    gpio_set_dir(MUX_A,   GPIO_OUT);
-    gpio_set_dir(MUX_B,   GPIO_OUT);
-    gpio_set_dir(MUX_C,   GPIO_OUT);
+    gpio_set_dir(DMUX_A,   GPIO_OUT);
+    gpio_set_dir(DMUX_B,   GPIO_OUT);
+    gpio_set_dir(DMUX_C,   GPIO_OUT);
 
     gpio_put(PIN_RCK, 0);
 }
@@ -689,7 +693,7 @@ void led_buffer_rotate_90(void); //画面全体を90度時計回りに回転
  * @brief 指定した8x8ドット絵パターン(8バイト配列)を一括転写
  * @param[in] pattern 8バイトのパターン配列
  */
-void led_buffer_draw_pattern(const uint8_t pattern[8]) {
+void led_buffer_draw_pattern(const uint8_t pattern[28]) {
     if (pattern == NULL) return;
     for (int i = 0; i < 8; i++) {
         led_matrix_buffer.bytes[i] = pattern[i];
@@ -1012,15 +1016,15 @@ int main()
     gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
     gpio_set_function(PIN_RCK,  GPIO_FUNC_SIO);
 
-    gpio_set_function(MUX_A, GPIO_FUNC_SIO);
-    gpio_set_function(MUX_B, GPIO_FUNC_SIO);
-    gpio_set_function(MUX_C, GPIO_FUNC_SIO);
+    gpio_set_function(DMUX_A, GPIO_FUNC_SIO);
+    gpio_set_function(DMUX_B, GPIO_FUNC_SIO);
+    gpio_set_function(DMUX_C, GPIO_FUNC_SIO);
 
     // ピンの方向を出力に設定
     gpio_set_dir(PIN_RCK, GPIO_OUT);
-    gpio_set_dir(MUX_A,   GPIO_OUT);
-    gpio_set_dir(MUX_B,   GPIO_OUT);
-    gpio_set_dir(MUX_C,   GPIO_OUT);
+    gpio_set_dir(DMUX_A,   GPIO_OUT);
+    gpio_set_dir(DMUX_B,   GPIO_OUT);
+    gpio_set_dir(DMUX_C,   GPIO_OUT);
 
     gpio_put(PIN_RCK, 0);
 
