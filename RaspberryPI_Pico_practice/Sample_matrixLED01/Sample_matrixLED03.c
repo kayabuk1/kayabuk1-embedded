@@ -51,6 +51,7 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 #include <stdbool.h>
 #include <stdlib.h>
 #include "pico/stdlib.h"
+#include "hardware/spi.h"
 
 
 // 美咲フォントヘッダのインクルード
@@ -693,7 +694,7 @@ void led_buffer_rotate_90(void); //画面全体を90度時計回りに回転
  * @brief 指定した8x8ドット絵パターン(8バイト配列)を一括転写
  * @param[in] pattern 8バイトのパターン配列
  */
-void led_buffer_draw_pattern(const uint8_t pattern[28]) {
+void led_buffer_draw_pattern(const uint8_t pattern[8]) {
     if (pattern == NULL) return;
     for (int i = 0; i < 8; i++) {
         led_matrix_buffer.bytes[i] = pattern[i];
