@@ -8,8 +8,10 @@
 済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
 ●コメントと実際の値が合っていない箇所の修正
 先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、関数の引数と同じ名前です。紛らわしいので削除できます。
-済●led_render_test_one_by_oneは「render」の誤字で、test_accumulate_dots_animationとほぼ同じ内容です。
-led_buffer_shift_right_colも「right」の誤字です。
+済●led_render_test_one_by_oneは「render」の誤字で、
+test_accumulate_dots_animationとほぼ同じ内容です。
+⇒累積1ドット点灯と非累積1ドット点灯で実際に動かすと点灯の仕方がまるで違って興味深いので残しておく。
+led_buffer_push_col_from_leftも「right」の誤字です。
 ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。
 今の環境（GCC、ARM）では動きますが、移植性はありません。
 set_pixelは、switchの代わりにビット演算で書けます。
@@ -580,14 +582,14 @@ uint8_t led_buffer_get_col(uint8_t x) {
 // ３．シフト（移動）バッファ操作
 // -------------------------------------------------------------
 void led_buffer_shift_cols(int offset_times); 
-// 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
+// 画面全体を左右に offset_times ピクセル分シフト（正＝右、負＝左）
 void led_buffer_shift_rows(int offset_times); 
 // 画面全体を上下に offset_times ピクセル分シフト（正＝上、負＝下）
 
-// 没shift_colsと機能重複している？⇒いや下の2関数は新しい描画データを挿入している。
+// shift_colsと機能重複している？⇒いや下の2関数は新しい描画データを挿入している。
 // ⇒名前の変更が必要だ。
-// void led_buffer_shift_left_col(uint8_t new_rightend_col_data);
-// void led_buffer_shift_right_col(uint8_t new_leftend_col_data);
+void led_buffer_push_col_from_right(uint8_t new_rightend_col_data);
+void led_buffer_push_col_from_left(uint8_t new_leftend_col_data);
 
 // 【画面上の配置】   [x0:左端]  [x1]  [x2]  [x3]  [x4]  [x5]  [x6]  [x7:右端]
 //                     │       │     │     │     │     │     │       │
@@ -597,7 +599,7 @@ void led_buffer_shift_rows(int offset_times);
 //bit 7|6|5|4|3|2|1|0 番目
 /**
  * @brief 画面全体を左右に offset_times ピクセル分シフト（正＝右へ、負＝左へ※左上原点）
- * @param[in] offset_times シフトドット数 (正の値で左シフト、負の値で右シフト)
+ * @param[in] offset_times シフトドット数 (正の値で右シフト、負の値で左シフト)
  */
 void led_buffer_shift_cols(int offset_times) {
     if (offset_times == 0) return;
@@ -608,6 +610,7 @@ void led_buffer_shift_cols(int offset_times) {
             = led_matrix_buffer.bytes[y] << offset_times;
             // ex:offset_times=2、元行データ0b0110_1001なら、
             // 0b⇐旧01|1010_01|新00⇐ これを8行分繰り返すと縦1列が横にシフトした様に見える。
+            // ※<<2 は「右端（bit7, bit6）の2列が落ちて、左端（x0, x1）に空き列が入る。
         }
     } else { // 左シフト (x0方向へ詰める)
         int abs_offset_times = -offset_times;
@@ -663,18 +666,20 @@ void led_buffer_shift_rows(int offset_times) {
 
 /**
  * @brief 画面バッファ全体を1ピクセル左⇐へ送り出し、右⇒端列に新しい1列データを追加
- * @param[in] new_rightend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
+ * @param[in] new_rightend_col_data 画面右端(7bit目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
  */
-void led_buffer_shift_left_col(uint8_t new_rightend_col_data) {
+void led_buffer_push_col_from_right(uint8_t new_rightend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         uint8_t new_bit = (new_rightend_col_data >> y) & 0x01;
         // 次の右端列データが0b1101_0011で5ループ目なら、
         // (new_rightend_col_data >> y) & 0x01
         // ⇒5シフトして0b0000_1101これと0b0000_0001の論理積で、
         // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0001
+        // 右端に追加するのでx7の位置まで左シフトして0b1000_0000
         led_matrix_buffer.bytes[y] 
         = (led_matrix_buffer.bytes[y] >> 1) | (new_bit <<7);
-        // 5列目の8bitデータex:0b0111_1010⇐1シフトして0b1111_0100と論理和
+        // 5列目の8bitデータex:0b0111_1010なら画面左へ動かすならx0方向にシフトする
+        // ので、⇒1シフトして0b新0|011_1101|旧0、newbit0b1000_0000これと論理和して
         // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
         // これを7行分繰り返す。
     }
@@ -684,16 +689,18 @@ void led_buffer_shift_left_col(uint8_t new_rightend_col_data) {
  * @brief 画面バッファ全体を1ピクセル右⇒へ送り出し、左⇐端列に新しい1列データを追加
  * @param[in] new_leftend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
  */
-void led_buffer_shift_right_col(uint8_t new_leftend_col_data) {
+void led_buffer_push_col_from_left(uint8_t new_leftend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         uint8_t new_bit = (new_leftend_col_data >> y) & 0x01;
-        // 次の右端列データが0b1101_1011で5ループ目なら、
+        // 次の左端列データが0b1101_1011で5ループ目なら、
         // (new_rightend_col_data >> y) & 0x01
-        // ⇒5シフトして0b0000_1101これと0b1000_0000の論理積で、
-        // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0000
+        // ⇒5シフトして0b0000_1101これと0b0000_0001の論理積で、
+        // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0001
+        // 左端に追加するのでx0の位置なのでシフトせずこのまま次の計算に使用。
         led_matrix_buffer.bytes[y] 
         = (led_matrix_buffer.bytes[y] << 1) | new_bit;
-        // 5列目の8bitデータex:0b0111_1010⇒1シフトして0b0011_1101と論理和
+        // 5列目の8bitデータex:0b0111_1010⇐1シフトして0b0|1111_010|0にこれと、
+        // newbit0b0000_0001との論理和で、
         // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
         // これを7行分繰り返す。
     }
@@ -899,7 +906,7 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
             }
 
             // バッファを1ピクセル左シフトし、新しい1列を追加
-            led_buffer_shift_left_col(col_pattern);
+            led_buffer_push_col_from_right(col_pattern);
 
             // 指定時間ぶんダイナミック点灯描画
             led_render_frame(step_delay_ms);
