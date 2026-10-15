@@ -582,8 +582,18 @@ void led_buffer_shift_cols(int offset_times);
 // 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
 void led_buffer_shift_rows(int offset_times); 
 // 画面全体を上下に offset_times ピクセル分シフト（正＝上、負＝下）
-void led_buffer_shift_left_col(uint8_t new_rightend_col_data);
-void led_buffer_shift_right_col(uint8_t new_leftend_col_data);
+
+// 没shift_colsと機能重複している？⇒いや下の2関数は新しい描画データを挿入している。
+// ⇒名前の変更が必要だ。
+// void led_buffer_shift_left_col(uint8_t new_rightend_col_data);
+// void led_buffer_shift_right_col(uint8_t new_leftend_col_data);
+
+// 【画面上の配置】   [x0:左端]  [x1]  [x2]  [x3]  [x4]  [x5]  [x6]  [x7:右端]
+//                     │       │     │     │     │     │     │       │
+// 【C言語のビット】  bit 0   bit 1 bit 2 bit 3 bit 4 bit 5 bit 6   bit 7 (MSB)
+//                   (LSB/左)                                     (MSB/右)
+//  0b1 0 1 0 1 0 1 0 実際のビットの並びとLED画面への反映が反転しているので注意。
+//bit 7|6|5|4|3|2|1|0 番目
 
 /**
  * @brief 画面全体を左右に offset_times ピクセル分シフト（正＝左、負＝右）
@@ -646,10 +656,7 @@ void led_buffer_shift_rows(int offset_times) {
     }
 }
 
-// 【画面上の配置】   [x0:左端]  [x1]  [x2]  [x3]  [x4]  [x5]  [x6]  [x7:右端]
-//                     │       │     │     │     │     │     │       │
-// 【C言語のビット】  bit 0   bit 1 bit 2 bit 3 bit 4 bit 5 bit 6   bit 7 (MSB)
-//                   (LSB/左)                                     (MSB/右)
+
 /**
  * @brief 画面バッファ全体を1ピクセル左⇐へ送り出し、右⇒端列に新しい1列データを追加
  * @param[in] new_rightend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
