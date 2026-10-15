@@ -3,16 +3,19 @@
 ★miskaiフォントの英数字が半角で幅が4前後で文字と文字間の空白が大きくなって
 　しまっている問題。
 ★misakiフォントのクレジットを記載する。
-●led_buffer_shift_colsの向きがコメントと逆
-済●時間の計算が、定数を変えると止まる作り
-済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
-●コメントと実際の値が合っていない箇所の修正
-先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、関数の引数と同じ名前です。紛らわしいので削除できます。
-済●led_render_test_one_by_oneは「render」の誤字で、
-test_accumulate_dots_animationとほぼ同じ内容です。
-⇒累積1ドット点灯と非累積1ドット点灯で実際に動かすと点灯の仕方がまるで違って興味深いので残しておく。
-led_buffer_push_col_from_leftも「right」の誤字です。
-ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。
+
+    済●led_buffer_shift_colsの向きがコメントと逆
+    済●時間の計算が、定数を変えると止まる作り
+    済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
+　  一旦済●コメントと実際の値が合っていない箇所の修正
+　  済●先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、
+　　    関数の引数と同じ名前です。紛らわしいので削除できます。
+    済●led_render_test_one_by_oneは「render」の誤字で、
+　　    test_accumulate_dots_animationとほぼ同じ内容です。
+　　　  ⇒累積1ドット点灯と非累積1ドット点灯で実際に動かすと点灯の仕方がまるで違って興味深いので残しておく。
+済？●led_buffer_push_col_from_leftも「right」の誤字です。
+
+●ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。
 今の環境（GCC、ARM）では動きますが、移植性はありません。
 set_pixelは、switchの代わりにビット演算で書けます。
 ⇒switch文の部分の修正はする。
