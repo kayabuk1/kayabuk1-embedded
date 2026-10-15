@@ -5,13 +5,18 @@
 ★misakiフォントのクレジットを記載する。
 ●led_buffer_shift_colsの向きがコメントと逆
 ●時間の計算が、定数を変えると止まる作り
-●ゴースト（残像）が出る可能性
+済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
 ●コメントと実際の値が合っていない箇所の修正
 先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、関数の引数と同じ名前です。紛らわしいので削除できます。
-led_lender_test_one_by_oneは「render」の誤字で、test_accumulate_dots_animationとほぼ同じ内容です。
+済●led_render_test_one_by_oneは「render」の誤字で、test_accumulate_dots_animationとほぼ同じ内容です。
 led_buffer_shift_righ_colも「right」の誤字です。
 ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。今の環境（GCC、ARM）では動きますが、移植性はありません。set_pixelは、switchの代わりにビット演算で書けます。
-
+README.md の作成 ＆ 実機動作のGIF/写真撮影
+回路構成、苦労したバグと解決法、美咲フォントのライセンス、AI活用の明記をまとめたドキュメント作成（面接でそのまま見せられる資料になります）。
+74HC138のイネーブルピン（/E1, /E2, E3）による物理ブランキングの検討
+今回ソフト側（74HC595への 0xFF 出力）でゴースト対策をしますが、「もし基板のイネーブルピンがマイコンに繋がっていたらGPIO制御でも消灯できる」という回路的知識をメモしておくと回路設計者との会話で強みになります。
+アロー演算子記法のルール整理（リスト内の記法補足）
+リストにある led_matrix->bytes[].x0 について：bytes[y] は単なる uint8_t（数値）の配列なので、後ろに .x0 を付けることはできません。ビットアクセスしたい場合は led_matrix->grid[y].x0 と書きます（一番外側のポインタ部分だけを -> に変え、内部の配列や構造体は . を使います）。
 
 ●一部関数内ですでに作成した基本操作関数を使わずに処理している部分が無いか精査
 ●reverse_bits関数が使われていない問題
@@ -204,6 +209,7 @@ static const char scroll_text[] = " HELLO PICO! 12345 ";
 // =============================================================
 
 static inline uint8_t reverse_bits(uint8_t b);
+static inline void hw_matrix_led_blanking(void);
 static inline void hw_matrix_select_active_row(uint8_t row);       
 static void        hw_matrix_output_line(uint8_t row, uint8_t line_data); 
 
@@ -219,7 +225,25 @@ static inline uint8_t reverse_bits(uint8_t b) {
     return b;
 }
 
-
+/**
+ * @brief 74HC595(カソード)へ全High(0xFF)を出力(low点灯high消灯)し、
+ *　LEDを消灯(ブランキング)する
+ * @note 行切り替え時のゴースト(残像)を防止するために使用します。
+ *　※バッファクリア関数は描画用の下書きをクリアする関数なので役割が違う。
+ */
+static inline void hw_matrix_led_blanking(void){
+    uint8_t clear_data = 0xFF;
+    spi_write_blocking(SPI_PORT, &clear_data, 1);
+     // ラッチパルス(RCK)で出力を更新
+    gpio_put(PIN_RCK, 1);
+    sleep_us(1);
+    gpio_put(PIN_RCK, 0);
+}
+// 没hw_matrix_select_active_row(row)（74HC138のGPIOピン操作） も毎回実行無駄な為
+// static inline void hw_matrix_led_blanking(uint8_t ago_row){
+//     uint8_t clear_line_data = 0x00;
+//     hw_matrix_output_line(uint8_t ago_row, uint8_t clear_line_data);
+// }
 
 /**
  * @brief 74HC138 (デコーダ/アノード行選択※点灯行選択) 出力設定関数
@@ -720,6 +744,7 @@ void led_render_scan_once(void) {
         hw_matrix_output_line(row, line_data);
         // 1行あたりの点灯保持時間（2000μs = 2ms）
         sleep_us(ROW_SCAN_TIME_US);
+        hw_matrix_led_blanking(void);
     }
 }
 
@@ -785,7 +810,7 @@ void led_render_blink(uint32_t interval_ms, uint8_t times) {
 /**
  * 1ドットずつ順番に点灯していくテストアニメーション関数
  */
-void led_lender_test_one_by_one(void){
+void led_render_test_one_by_one(void){
     for (int y = 0; y < 8; y++) {
         for (int x = 0; x < 8; x++) {
             // 内部で switch(x) が働いて
