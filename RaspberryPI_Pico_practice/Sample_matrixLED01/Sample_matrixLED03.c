@@ -164,7 +164,7 @@ static inline void hw_matrix_select_active_row(uint8_t row)
  * @param[in] line_data 表示させる1行分(8ドット)の点灯パターン (1=ON, 0=OFF)
  * @note カソード制御のため、内部でビット反転(~)を行って送信します。
  */
-static　inline　void hw_matrix_output_line(uint8_t row, uint8_t line_data)
+static inline void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {   
     // ●uint8_t row: 表示対象の行番号（0 〜 7）。
     // uint8_t line_data: その行に表示させたい 1行分（8ドット）のLED点灯パターン。
