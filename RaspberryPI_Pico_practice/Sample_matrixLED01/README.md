@@ -1,8 +1,8 @@
 # 8×8 LEDマトリクス表示ドライバ（Raspberry Pi Pico / C言語）
 
-![動作の様子](https://photos.app.goo.gl/DxVpVHNTVNepkytB7)
+![動作の様子](RaspberryPI_Pico_practice/Sample_matrixLED01/20261016_matrixLED点灯試験様子.png)
 動画：(https://photos.app.goo.gl/Aj9LryQogsvCSmmR6)
-動画QRコード：(RaspberryPI_Pico_practice/Sample_matrixLED01/QR_20261016_matrixLED点灯試験様子動画.png)
+![動画QRコード]：(RaspberryPI_Pico_practice/Sample_matrixLED01/QR_20261016_matrixLED点灯試験様子動画.png)
 
 ## 概要
 Raspberry Pi Pico（RP2040）で 8×8 LEDマトリクスをダイナミック点灯させ、
