@@ -1,65 +1,3 @@
-/*◆やることリスト（一部学習として身に着けておきたいことも含む）
-抜けているもの：ステップ0（v1の完成）
-実機で確認する（ゴースト、シフト方向、スクロール）
-動画かGIFを撮る
-README を書く
-先生に公開してよいか確認する
-GitHubで公開する
-
-●動作トレースや原理などのコメントの追記修正
-★miskaiフォントの英数字が半角で幅が4前後で文字と文字間の空白が大きくなって
-　しまっている問題。
-	
-	済★misakiフォントのクレジットを記載する。
-    済●led_buffer_shift_colsの向きがコメントと逆
-    済●時間の計算が、定数を変えると止まる作り
-    済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
-　  一旦済●コメントと実際の値が合っていない箇所の修正
-　  済●先頭のグローバル変数duration_ms、interval_ms、timesは使われておらず、
-　　    関数の引数と同じ名前です。紛らわしいので削除できます。
-    済●led_render_test_one_by_oneは「render」の誤字で、
-　　    test_accumulate_dots_animationとほぼ同じ内容です。
-　　　  ⇒累積1ドット点灯と非累積1ドット点灯で実際に動かすと点灯の仕方がまるで違って興味深いので残しておく。
-        ⇒削除。累積と非累積の比較は test_accumulate_dots_animation と test_one_by_one_dot_animation で確認できる
-    済？●led_buffer_push_col_from_leftも「right」の誤字です。
-
-●ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。
-今の環境（GCC、ARM）では動きますが、移植性はありません。
-set_pixelは、switchの代わりにビット演算で書けます。
-⇒switch文の部分の修正はする。
-ただ、ビット演算はイメージがしにくい部分があるので、
-また授業で同級生にコードを配布する可能性があるので可読性の高いスイッチ文のコードを残しておいて、
-下にコメントの形で実装する。処理速度重視したくなったら下のコードをコメントアウトしてもらう。
-訓練校での環境は皆同じPicoなので問題ないと考える。
-
-●README.md の作成 ＆ 実機動作のGIF/写真撮影
-●回路構成、苦労したバグと解決法、美咲フォントのライセンス、AI活用の明記をまとめたドキュメント作成（面接でそのまま見せられる資料になります）。
-●74HC138のイネーブルピン（/E1, /E2, E3）による物理ブランキングの検討
-●今回ソフト側（74HC595への 0xFF 出力）でゴースト対策をしますが、「もし基板のイネーブルピンがマイコンに繋がっていたらGPIO制御でも消灯できる」という回路的知識をメモしておくと回路設計者との会話で強みになります。
-●アロー演算子記法のルール整理（リスト内の記法補足）
-リストにある led_matrix->bytes[].x0 について：bytes[y] は単なる uint8_t（数値）の配列なので、後ろに .x0 を付けることはできません。ビットアクセスしたい場合は led_matrix->grid[y].x0 と書きます（一番外側のポインタ部分だけを -> に変え、内部の配列や構造体は . を使います）。
-
-●一部関数内ですでに作成した基本操作関数を使わずに処理している部分が無いか精査
-●reverse_bits関数が使われていない問題
-●表示したい点灯パターンを8*8の1コマとして、複数コマ配列で保持してそれを点灯
-●LEDバッファのポインタを作成
-●マルチバッファ制御の実装
-●ポインタ渡し
-●アロー演算子でのアクセス（.ではなくポインタで処理軽く）
-led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0でのアクセス
-●関数ポインタの作成と関数ポインタを渡しての処理の実行
-●ISR割り込み処理の実装。割り込み処理に何をさせるか(LED点灯画面更新？)
-●ISRに関数ポインタを渡して、コールバック処理の自由度を上げる。
-●ステートパターン（モード切替）の実装。
-
-●プログラムファイルの分割
-・グローバル変数を減らす。
-・内部的なデータおよび関数にstaticを付ける。
-・inline化が望ましい関数にはinlineを付ける。
-*/
-
-
-
 /**
  * @file Sample_matrixLED03_refactored.c
  * @brief Raspberry Pi Pico 8x8 LEDマトリクス制御プログラム
@@ -73,7 +11,6 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 #include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
-
 
 // 美咲フォントヘッダのインクルード
 #include "misaki_font.h"
@@ -103,33 +40,6 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 // ●1行あたりの切り替え時間（sleep_us の値）
 // 　2,000μs ÷ 8行 = 250μs
 #define ROW_SCAN_TIME_US 250 /**< 1行あたりの点灯時間 (250us) */
-//没 #define ROW_SCAN_TIME_US 250.0 /**< 1行あたりの点灯時間 (250us) */
-// Raspberry Pi Pico（RP2040）にはハードウェア浮動小数点演算器（FPU）が無い。
-// double や float を使うと、ソフトウェアで重い小数計算を行うライブラリが引き込まれ、
-// 処理スピードが遅くなるとのこと。
-
-// ●1フレーム（8行スキャン）にかかる時間を自動計算（ミリ秒）
-// (8行 × 250μs) ÷ 1000 ＝  2ms 
-// #没不要に define FRAME_SCAN_TIME_MS ((8 * ROW_SCAN_TIME_US) / 1000) /**< 1フレーム(8行)の走査時間 (2ms) */
-//没FPUが無い為。 #define FRAME_SCAN_TIME_MS (double)((double)(8 * ROW_SCAN_TIME_US) / 1000.0) /**< 1フレーム(8行)の走査時間 (2ms) */
-
-// // 没true条件に入れてしまうのも可能？
-// //    while ((time_us_32() - start_time) < duration_ms)これも可能？
-// uint32_t start_time = time_us_32()/1000;
-// uint32_t elapsed_ms = 0;
-// uint32_t end_time = 0;
-//     // 指定された時間（duration_ms）に達するまでスキャンを繰り返す
-//     while ((end_time - start_time) < duration_ms) {
-//         led_render_scan_once();
-//         end_time = time_us_32()/1000;
-//         // elapsed_ms += end_time - start_time;
-//         // elapsed_ms += FRAME_SCAN_TIME_MS; // 1周で約2ms経過
-//     }
-// }
-// // C言語の符号なし32ビット整数（uint32_t）で 0 - 10 を計算すると、数値がループして
-// // 4,294,967,286（約42億ミリ秒＝約49日） という巨大な値になる。結果一瞬でループ終了。
-// // while ループの直前で end_time = time_us_32() / 1000; または最初の1周を保証する
-// // do { ... } while (...); にする必要とのこと。
 
 // デフォルト時間設定
 #define DEFAULT_RENDER_DURATION_MS 10000 /**< デフォルト点灯保持時間 (10000ms = 10秒) */
@@ -140,12 +50,11 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
 // -------------------------------------------------------------
-
 // 原点 (0, 0)：画面の左上隅。
 // ■データ構造（共用体 union の活用）
 // union（共用体）を使うと、「8バイトの配列」としてもアクセスでき、
 // 同時に「(y, x) 座標の1ビット」としても直感的にアクセスできる
-// 構造体を作ることができるとのこと。
+// 構造体を作ることができる。
 /**
  * @brief 1行分(8ビット)のビットフィールド構造体
  */
@@ -159,14 +68,6 @@ typedef struct {
     uint8_t x6 : 1; /**< 6列目 */
     uint8_t x7 : 1; /**< 7列目(右端) */
 } RowBits;
-// ・uint8_t x0 : 1; のように :（コロン）と数字を書くと、
-// 指定したビット数（ここでは1ビット）だけをその変数に割り当てる
-// という命令になる。
-// ・通常、uint8_t 型の変数を宣言すると1バイト（8ビット）消費するが、
-// ビットフィールドを使うと 1バイトの領域を8等分して、それぞれに
-//  x0 〜 x7 という名前をつける ことができる。
-// ・普通の構造体と同じように .（ドット）でアクセス可能。
-// ex：row[y].x0 = 1; // y行x0（0ビット目）に 1（点灯）をセット
 
 /**
  * @brief 8x8 LEDフレームバッファ共用体
@@ -186,42 +87,11 @@ typedef union {
 // bytes[y]5
 // bytes[y]6
 // bytes[y]7
-// ●共用体（union）は一つのメモリを色々な切り口で扱う。
-// ・構造体（struct）: 
-// メンバーごとにメモリが横に並ぶ（bytes[8] と grid[8] 
-// で計 16 バイト消費する）
-// ・共用体（union）: すべてのメンバーが全く同じメモリ空間（先頭アドレス）
-// を共有して重なる（計 8 バイトしか消費しない）
-// なので、RowBits型の配列を作って、grid[8]RowBits型が8個入るという形
-// にしたら、(y=2, x=3) の1ピクセルだけを点灯させたい時は
-// ・led_matrix_buffer.grid[2].x3 = 1;と言う形でアクセス出来る。
-// ・SPI送信で2行目の8ビットを一括送信したい時（そのまま渡せる）
-// spi_write_blocking(SPI_PORT, &led_matrix_buffer.bytes[2], 1);
-// 　　　　　　　　　　　　　　　　↑ここが2行目の8ビットを指定
 
 /**
  * @brief グローバル・フレームバッファ（下書き用キャンバス）の宣言と初期化
  */
 static LEDBuffer_t led_matrix_buffer = { .bytes = {0} };
-// ■グローバルまたはモジュール内の基準バッファ
-// ●なぜLED制御でバッファ（フレームバッファ）が必要なのか？
-// もしバッファがなく、1ピクセル点灯させるたびに直接ハードウェア
-// （SPIやLED）へデータを送信しようとすると、画面が一瞬チラついたり、
-// 表示が崩れたりしてする。
-// そのため、マイコンのメモリ（SRAM）上に 
-// 「画面の下書き用キャンバス（LEDBuffer）」 を用意しておき：
-// ・下書きフェーズ: プログラム上で1ピクセルつけたり、
-// 文字をずらしたりして、バッファ上で次のコマの絵を完成させる。
-// ・描画フェーズ: 完成したバッファのデータを、ダイナミック点灯
-// （タイマーや繰り返し処理）で一気にLEDへ送り出して表示する。
-// ・このように、「画面のデータを作成する場所」 と
-//  「LEDを物理的に光らせる場所」 を分けるための「下書き用メモリ領域」
-// だから バッファ と呼ばれている。
-// ・{ .bytes = {0} }は指示付き初期化子（Designated Initializer）」という文法。
-// 共用体は複数のメンバーを持っているので、普通に {0} と書くだけだと
-// 「どのメンバーを初期化しているのか」が分からない。
-// .bytes = {0} と書くことで、共用体の中の .bytes 配列メンバーを
-// 指定して、全要素を 0（全消灯状態）で初期化の意味になる。
 
 /**
  * @brief スクロール表示用サンプルテキスト※表示させたい文字列を入れる配列
@@ -235,15 +105,8 @@ static const char scroll_text[] = " HELLO PICO! 12345 ";
  * @typed wchar_t　※型が異なるので注意
  */
 // static const wchar_t scroll_text[] = L" Hello Pico! こんにちは！";
-
 // ※表示させたいメッセージ（日本語・英数字ミックスOK）
 // ●C言語コンパイラに「文字」は「数値（文字コード）」に変換されるので、そのまま文字列を入れる。
-// ●「wchar_t(ワイド文字型)」日本語や各種言語の文字(Unicode)を、
-// C言語で普通のchar型の様に一文字ずつ扱える様する為の「大きな文字型」。
-// 日本語も英数字も、１文字＝１要素として均一に扱える様になる。
-// 文字列の先頭の L は、L プレフィックス。コンパイラにwchar_t型で扱うことを
-// 伝えるサイン。
-// ●const ：変数やポインタの値を「読み取り専用（変更不可）」にする修飾子。
 
 // =============================================================
 // 0. ハードウェア直接制御層 (HAL / 内部ヘルパー関数)
@@ -292,41 +155,12 @@ static inline void hw_matrix_led_blanking(void){
  * @param[in] row 選択する行番号 (0 〜 7)
  */
 static inline void hw_matrix_select_active_row(uint8_t row)
-// ●「static」静的修飾子：この関数を「この」C言語ファイル限定で使うという宣言。
-// これによって、他Cファイルとの名前衝突エラーを防ぐ。アクセス範囲（スコープ）の制限。
-// 変数にstaticを付ける場合と、関数にstaticを付ける場合とで意味が異なる。
-// 変数の場合は、メモリ領域（静的データ領域）への永久保持。
-// ●「inline」インライン指定子：関数を呼び出す時に、関数への「ジャンプ」を
-// 行わずに、コンパイル時に呼び出し元の関数実装内容を直接埋め込み展開するように
-// ｺﾝﾊﾟｲﾗに指示する命令。
-// 通常の関数の呼び出しはスタックへの退避などのわずかなオーバーヘッドが発生する。
-// LEDのダイナミック点灯の様に、１秒間に何千回も高速で呼び出す関数は、inline化して
-// ジャンプするオーバーヘッドをなくして、メインループで直接内容を実行出来る様に
-// する。※その分メインループの使用メモリ量が増える。
-// ●static inline とセットで書くのか？
-// inline だけだと、コンパイラによっては「外部のファイルから呼ばれるかもしれ
-// ないから、一応関数の実体も残しておこう」と判断し無駄なコードが残ってしまうことがある。
-// static（このファイル限定）と inline（埋め込み）をセットで書くことで、
-// コンパイラに「他ファイルから絶対呼ばれないから、完全に埋め込んで関数の
-// 実体は消し去ってOK！」と伝えることができ、無駄無くなる。
-// ●「uint8_t row」<stdint.h>で定義されている「符号無し8ビット整数(0～255)」。
-// unsigned char型と同じサイズだが、8bit(1byte)サイズであることを「明示」する
-// 為にこちらを使う。「row」は点灯させたい行を受け取る変数。
 {
     gpio_put(DMUX_A, (row >> 0) & 0x01); // 0ビット目
     gpio_put(DMUX_B, (row >> 1) & 0x01); // 1ビット目
     gpio_put(DMUX_C, (row >> 2) & 0x01); // 2ビット目
     // ●74HC138との連携：74HC138は、3本のバイナリ入力端子(A,B,C)の「H/L」の
     // 組み合わせで8本の出力端子(Y0~Y7)のどれか「１つ」に「Low」を出力する、
-    // 3to8ラインデコーダ機能を持ったIC。デマルチプレクサの1種。
-    // 多入力⇒少出力がマルチプレクサで、少入力⇒多出力がデマルチプレクサ。
-    // ●DMUX_B（1ビット目＝2の位）の出力例
-    // row >> 1: 右に 1 ビットシフト（右に1つずらす）。
-    // 例：3 (2進数 011) を右に1つずらすと 001 になり、
-    // 欲しい「1ビット目」が一番右端へ移動 して来る。
-    // ●& 0x01: ビットAND演算子：0x01（2進数で 00000001）と論理積をとることで、
-    // 一番右（0ビット目）以外の余計な桁を全すべて0でマスク（消去） して、
-    // 0 または 1 だけを取り出し、DMUX_B()に1ビット目(2の位)のH/Lが取り込まれる。
 }
 
 /**
@@ -342,23 +176,8 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
     // 元データでは、1 ＝ 点灯（ON）、0 ＝ 消灯（OFF）という直感的なデータになっている。
 
     // 先に74HC138でアノード行を選択（点灯はまだ）
-    // hw_matrix_led_blanking消灯関数を実装して、この関数を呼び出して指定時間経過後、
-    // 消灯関数を必ず実行する様に修正したので、先に行選択しても意図しない行が点灯することは
-    // 無い。なので先に行を選ぶ。
     hw_matrix_select_active_row(row);
-    // ●行選択（アノード側の切り替え）
-    // ●hw_matrix_select_active_row(row);
-    // 上部に実装してある、アノード行選択用hw_matrix_select_active_row() 関数を呼び出し、
-    // 74HC138（アノード側）へ指定した row（行番号）の信号を送る。
-    // 指定した行の PNP トランジスタが ON になり、
-    // その行のアノードに 5V が供給される。
-    // これにより、「今 5V が通電したアノード行」と「74HC595で 0V (LOW) に
-    // 引き下げられたカソード列」の交差点にあるLEDだけが点灯する。
 
-    // ●カソード制御のためビット反転(~)
-    // 74HC595はLEDカソード側を制御している＝LEDを点灯させるには、
-    // カソード側をLowにする必要がる。その為、1=点灯になっている元データを
-    // ビット反転演算子で全ビットを反転させる。
     uint8_t inv_data = ~line_data;
     spi_write_blocking(SPI_PORT, &inv_data, 1);
     // ●int spi_write_blocking
@@ -366,28 +185,6 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
     // ●spi_inst_t: Pico SDKで定義されている「SPIペリフェラル（ハードウェア機能）
     // を管理する構造体」 の型名。RP2040マイコン内部のSPI回路のレジスタ群が
     // まとめられている。
-    // * (ポインタ): 構造体の大きな実体をまるごとコピーして渡すのではなく、
-    // 「その構造体が置いてあるメモリのアドレス」 を渡す。
-    // 「Pico内に2つあるSPI回路（spi0 または spi1）のどちらを使って送信するか？」
-    // を指定する。コードで SPI_PORT（spi0）を渡している。プリプロセス部でdefine
-    // されているspi0自体も spi_inst_t型へのポインタ型として定義されている。
-    // ● const uint8_t *src
-    // ● *src (Source / ポインタ): 送信したいデータが格納されている 
-    // 「メモリの先頭番地（ポインタ）」
-    // &inv_data: アドレス演算子 & 。
-    // 送信したい変数 inv_data が入っている「メモリのアドレス（ポインタ）」を
-    // 関数に渡す。&inv_data と &（アドレス演算子）を付けて渡した理由は、
-    // この引数が「値そのもの」ではなく「アドレス（ポインタ）」を渡す定義になっているから。
-    //  ●blocking（ブロッキング）:
-    // 「送信が完了するまで、CPUの処理をここで一時停止して待つ（ブロックする）」
-    // という意味です。送信完了を確認してから次の処理へ進むため、
-    // 安全にデータが送られる。
-    // ● size_t len （送信バイト数）
-    // size_t: <stddef.h> や <stdio.h> などで定義されている
-    // 「メモリのサイズや要素数を表すための標準的な符号なし整数型」。
-    // 環境に応じて最適なサイズが定義されており、RP2040（32ビットマイコン）では
-    //  uint32_t と同じ 32ビット幅になる。
-    // 64ビットのPC環境（WindowsやLinuxなど）では、size_t は uint64_t（64ビット幅）。
     // ●len (Length): src のアドレスから「何バイト分を順番に送るか」
     // というデータ長指定。
     // 今回は 1 バイト（8ビット）送るため 1 を指定。
@@ -397,9 +194,6 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
     gpio_put(PIN_RCK, 1);
     sleep_us(1);
     gpio_put(PIN_RCK, 0);
-    // ●sleep_us(1) の役割:
-    // 1 マイクロ秒だけ待機。ICが「信号が変化した」と確実に認識するための
-    // 最低限のパルス幅を確保。
 }
 
 
@@ -411,9 +205,6 @@ void init_hardware(void) {
 
     // SPI初期化 (100kHz⇒1000kHzに変更)
     spi_init(SPI_PORT, 1000 * 1000);
-    // ブランキングで1バイト送るたびに、SPIが100kHzだと約80µsかかります。
-    // そのぶん点灯時間が削られて暗くなります。spi_init(SPI_PORT, 1000 * 1000);
-    // （1MHz）に上げると約8µsで済みます。74HC595はこの速さでも問題なく動きます。とのこと。
 
     // SPI通信(74HC595)用ピン機能設定
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI); // 74HC595 SER (データ)※データ入力
@@ -559,11 +350,6 @@ void led_buffer_set_col(uint8_t x, uint8_t col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         bool state = (col_data >> y) & 0x01;
         led_buffer_set_pixel(x, y, state);
-        // ex:x=3,coldate=0b0110_1010の時
-        // y=3ループ目、3bit⇒シフトして0b0000_1101、0b0000_0001と論理積
-        // ⇒yビット目だけの状態(0 or 1)を取り出せる。
-        // それをLEDバッファの1ピクセルにセットする。
-        // これを縦一列分続ける。
     }
 }
 
@@ -579,11 +365,6 @@ uint8_t led_buffer_get_col(uint8_t x) {
         if (led_buffer_get_pixel(x, y)) {
             // LEDブッファの1ピクセルの状態が点灯ならif内処理
             col_data |= (1 << y);
-            // y0,y1,y2=offで非実行でy3=onなら、
-            // ビット論理和代入演算子でcol_data自身と、y=3なので、
-            // 1＝0001を3bit(y分)ずらして1000=8。これとcol_dateの
-            // 論理和0b0000_0000,0b0000_1000で0b0000_1000がcoldateにセット
-            // これを縦一列分繰り返して返す。
         }
     }
     return col_data;
@@ -596,9 +377,6 @@ void led_buffer_shift_cols(int offset_times);
 // 画面全体を左右に offset_times ピクセル分シフト（正＝右、負＝左）
 void led_buffer_shift_rows(int offset_times); 
 // 画面全体を上下に offset_times ピクセル分シフト（正＝上、負＝下）
-
-// shift_colsと機能重複している？⇒いや下の2関数は新しい描画データを挿入している。
-// ⇒名前の変更が必要だ。
 void led_buffer_push_col_from_right(uint8_t new_rightend_col_data);
 void led_buffer_push_col_from_left(uint8_t new_leftend_col_data);
 
@@ -619,17 +397,12 @@ void led_buffer_shift_cols(int offset_times) {
         for (uint8_t y = 0; y < 8; y++) {
             led_matrix_buffer.bytes[y] 
             = led_matrix_buffer.bytes[y] << offset_times;
-            // ex:offset_times=2、元行データ0b0110_1001なら、
-            // 0b⇐旧01|1010_01|新00⇐ これを8行分繰り返すと縦1列が横にシフトした様に見える。
-            // ※<<2 は「右端（bit7, bit6）の2列が落ちて、左端（x0, x1）に空き列が入る。
         }
     } else { // 左シフト (x0方向へ詰める)
         int abs_offset_times = -offset_times;
         for (uint8_t y = 0; y < 8; y++) {
             led_matrix_buffer.bytes[y] 
             = led_matrix_buffer.bytes[y] >> abs_offset_times;
-            // ex:offset_times=-2、元行データ0b0110_1001なら、
-            // 0b⇒新00|01_10_10|旧01⇒ これを8行分繰り返すと縦1列が横にシフトした様に見える。
         }
     }
 }
@@ -644,11 +417,8 @@ void led_buffer_shift_rows(int offset_times) {
     if (offset_times > 0) { // 上シフト (y=0方向へ移動、下端に0を補填)
         for (int y = 0; y < 8; y++) {
             if (y + offset_times < 8) {
-                // y方向(上)に3行シフトなら0+3=3。4,5,6,7の5回まで移動
                 led_matrix_buffer.bytes[y] 
                 = led_matrix_buffer.bytes[y + offset_times];
-                // 8bit横一列一括で扱う。0列目(最上が0,最下が7)
-                // 0列目を0+3列目で上書き。次ループ1列目に4列目を上書き。
             } else {
                 // y+offset_times=8,9,10の残り下3列は全て0を詰める。
                 led_matrix_buffer.bytes[y] = 0x00;
@@ -660,15 +430,11 @@ void led_buffer_shift_rows(int offset_times) {
         for (int y = 7; y >= 0; y--) {
             // 最大値のy=7から始め、yをデクリメントして行く。
             if (y - abs_offset_times >= 0) {
-                // 入力が-3(下に3列シフト移動)なら、7-3=4>=0。
                 led_matrix_buffer.bytes[y] 
                 = led_matrix_buffer.bytes[y - abs_offset_times];
-                // 上から7列目を4列目データで上書き、
-                // 次ループ6列目を3列目データで上書き、5,2、4,1、
-                // 最後3列目データを0列目(最上列)データで上書き
             } else {
                 led_matrix_buffer.bytes[y] = 0x00;
-                // そのあとは残った上の列2,1,0は0で埋める。
+                // 残った上の列2,1,0は0で埋める。
             }
         }
     }
@@ -682,17 +448,8 @@ void led_buffer_shift_rows(int offset_times) {
 void led_buffer_push_col_from_right(uint8_t new_rightend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         uint8_t new_bit = (new_rightend_col_data >> y) & 0x01;
-        // 次の右端列データが0b1101_0011で5ループ目なら、
-        // (new_rightend_col_data >> y) & 0x01
-        // ⇒5シフトして0b0000_1101これと0b0000_0001の論理積で、
-        // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0001
-        // 右端に追加するのでx7の位置まで左シフトして0b1000_0000
         led_matrix_buffer.bytes[y] 
         = (led_matrix_buffer.bytes[y] >> 1) | (new_bit <<7);
-        // 5列目の8bitデータex:0b0111_1010なら画面左へ動かすならx0方向にシフトする
-        // ので、⇒1シフトして0b新0|011_1101|旧0、newbit0b1000_0000これと論理和して
-        // 0b1011_1101これで5列目の8bit全データを上書きして1ビットずれた様に。
-        // これを7行分繰り返す。
     }
 }
 
@@ -703,17 +460,8 @@ void led_buffer_push_col_from_right(uint8_t new_rightend_col_data) {
 void led_buffer_push_col_from_left(uint8_t new_leftend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         uint8_t new_bit = (new_leftend_col_data >> y) & 0x01;
-        // 次の左端列データが0b1101_1011で5ループ目なら、
-        // (new_rightend_col_data >> y) & 0x01
-        // ⇒5シフトして0b0000_1101これと0b0000_0001の論理積で、
-        // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0001
-        // 左端に追加するのでx0の位置なのでシフトせずこのまま次の計算に使用。
         led_matrix_buffer.bytes[y] 
         = (led_matrix_buffer.bytes[y] << 1) | new_bit;
-        // 5列目の8bitデータex:0b0111_1010⇐1シフトして0b0|1111_010|0にこれと、
-        // newbit0b0000_0001との論理和で、
-        // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
-        // これを7行分繰り返す。
     }
 }
 
@@ -723,7 +471,7 @@ void led_buffer_push_col_from_left(uint8_t new_leftend_col_data) {
 void led_buffer_draw_pattern(const uint8_t pattern[8]);
 // ：指定した8×8ドット絵パターンを一括転写
 void led_buffer_overlay_pattern(const uint8_t pattern[8], uint8_t mode);
-// ：OR合成 / AND合成 / XOR合成でパターンを重ね合わせ（キャラと背景の衝突や重なり表現に便利！）
+// ：OR合成 / AND合成 / XOR合成でパターンを重ね合わせ（キャラと背景の衝突や重なり表現に便利）
 void led_buffer_rotate_90(void); //画面全体を90度時計回りに回転 
 
 /**
@@ -782,7 +530,7 @@ void led_buffer_rotate_90(void) {
 
 // -------------------------------------------------------------
 // ５．点灯・タイミング制御などレンダラー（描画）関数群
-// ※ バッファの内容を500Hzのダイナミック点灯で物理LEDへ出力表示する
+// ※ バッファの内容を500Hzのダイナミック点灯で物理LEDへ出力表示
 // -------------------------------------------------------------
 
 void led_render_blink(uint32_t interval_ms, uint8_t times);
@@ -799,12 +547,7 @@ void mode_ticker_board(const char *text);
  */
 void led_render_scan_once(void) {
     for (uint8_t row = 0; row < 8; row++) {
-        // 共用体バッファから最新の y=row 行目の8ビットデータ
-        // （0b...）を直接参照
         uint8_t line_data = led_matrix_buffer.bytes[row];
-        // 既存の1行描画関数を呼び出す（7 - row で上下反転も吸収）
-        // ✖ hw_matrix_output_line(7 - row, line_data);
-        // 修正: 7 - row をやめ、row を直接渡すことで上下反転バグを解消
         hw_matrix_output_line(row, line_data);
         // 1行あたりの点灯保持時間（2000μs/8行 = 250us）
         sleep_us(ROW_SCAN_TIME_US);
@@ -821,37 +564,7 @@ void led_render_scan_once(void) {
  */
 void led_render_frame(uint32_t duration_ms) {
     if (duration_ms == 0) duration_ms = DEFAULT_RENDER_DURATION_MS;
-    // 🔹 render（レンダリング / 描画）とは？
-    // コンピュータグラフィックやマイコン制御における render は、
-    // 「メモリ上のデータ（バッファ）をもとに、実際に画面やLEDへ出力・
-    // 描画する処理」 のこと。 つまり led_render... は
-    // 「バッファに描いた下書きを実際のLEDへ映し出す関数」という
-    // 意味。
-    // 🔹 frame（フレーム）とは？
-    // パラパラマンガや動画の 「1コマの静止画」 のこと。
-    // LEDマトリクス制御では、「ある一瞬に8×8のLED全体で
-    // 表示されている1枚の点灯パターン」 を1フレームと呼ぶ。
-     // 現在時刻から duration_ms ミリ秒後の「絶対終了時刻」を生成（Pico SDK標準関数）
-    // 内部でget_absolute_time() で取得した現在時刻に引数で渡したミリ秒数（ms）を加算して返す。
     absolute_time_t end_time = make_timeout_time_ms(duration_ms);
-    
-    //没 uint32_t elapsed_ms = 0;
-    // 1回の scan_once に約2msかかるため、
-    // 経過時間を計算しながらループする
-    // 🔹 なぜ duration_ms（表示時間）は uint32_t なのか？
-    // duration ＝ 持続時間 / 表示する時間
-    // ms ＝ ミリ秒（1/1000秒）
-    // ミリ秒単位で「1秒（1000ms）」や「10秒（10000ms）」、
-    // あるいは「1分（60000ms）」といった大きめの時間を指定したときに
-    // 桁あふれ（オーバーフロー）しないようにするため。
-    // uint8_t（最大255＝約0.25秒までしか測れない）では不十分なため
-    // 時間を扱う引数には uint32_t（最大約49日分までOK）を使うのが
-    // 標準的なルール。
-    
-    // 終了時刻に達するまでスキャンを繰り返す（time_reached関数で判定）
-    // • static bool time_reached(absolute_time_t t)
-    // • 引数: t（指定する絶対時刻／64bitタイマカウント値。1カウント＝1マイクロ秒）
-    // • 戻り値: bool（指定した時刻に到達していれば true、まだであれば false）
     while (!time_reached(end_time)) {
         led_render_scan_once();
     }
@@ -878,25 +591,6 @@ void led_render_blink(uint32_t interval_ms, uint8_t times) {
     }
 }
 
-// 文字のドットパターンについて確認
-//{ L'\u0041', { 0x40, 0xA0, 0xA0, 0xA0, 0xE0, 0xA0, 0xA0, 0x00 } }, // 'A'
-// 0b 0100 0|000
-// 0b 1010 0|000
-// 0b 1010 0|000
-// 0b 1010 0|000
-// 0b 1110 0|000
-// 0b 1010 0|000
-// 0b 1010 0|000
-// 0b 0000 0|000
-// ⇒5文字目まででカットしてOK。右端が隣の文字との空隙になる。
-// { L'\u3093', { 0x10, 0x10, 0x20, 0x30, 0x4A, 0x4A, 0x84, 0x00 } }, // 'ん'
-// 0b 0001 0000
-// 0b 0001 0000
-// 0b 0010 0000
-// 0b 0011 0000
-// 0b 0100 1010
-// 0b 0100 1010
-// 0b 0000 0000
 /**
  * @brief 指定した文字列を1ドットずつスムーズに左スクロール表示する関数
  * @param[in] text スクロール表示させる文字列(ASCII)
@@ -909,21 +603,8 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
     for (size_t i = 0; i < len; i++) {
         // フォントデータ(8バイト)の取得
         const uint8_t *font_data = get_font_data_ascii(text[i]);
-        // data[i] は i番目の要素の値。アドレスは &data[i]（または data + i）になる。
-        // return font_table[i].data;今回戻って来るデータは、data[]配列のdataと言う配列名
-        // の形になっている。配列名だけの時は内部的に&data[0]という配列の0番目の要素への
-        // アドレスとして扱われる。なのでそれに間接参照*を付けた*font_dataはdata配列の
-        // 最初の要素の8bitデータへのアクセスになる。その場合0番目が0x00だった場合NULL
-        // 扱いになり文字が取得されない。その為、font_dataというポインタ自身がNULLだった
-        // （どこも指していなかった）ら、その文字の処理分の1ループをcontinueでスキップする
-        // のが適切。
         if (font_data == NULL) continue;
         int maxwidth = ((unsigned char)text[i] < 0x80) ? 5 : 8;
-        // char を符号付きとして扱うコンパイラでは、0x80以上の値が負の数に。
-        // そうなると < 0x80 が常に真になってしまうので、unsigned char型にキャストして、
-        // 判定に利用する。※上は三項演算子の記述の仕方。
-        // 0x80(128)未満は半角になるので、縦5列までにする
-        // ※「実機で見て隙間2列が読みやすかったため」
         // 'A'の時 u0041
         // 1文字(5列)分、縦1列ずつ取り出してバッファに挿入＆レンダリング
         for (int col = 0; col < maxwidth; col++) {
@@ -932,12 +613,7 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
             for (int row = 0; row < 8; row++) {
                 // (7 - col) でフォントの左端(bit7)から抽出
                 uint8_t bit = (font_data[row] >> (7 - col)) & 0x01;
-                // bit7~bit3までが必要なので、(7 - col)のままで良い。
-                // col=1,row=0,font_data[0]==0b 0100 0000の時
-                // 7-1=6右シフト0b0000_0001 & 0x01で6ビット目を取り出せた。
                 col_pattern |= (bit << row);
-                // これを、row=0行目なので0シフト(そのまま)し、初期値0x00と論理和
-                // colpattern==0x01が格納。これを縦1列データ分繰り返す。
             }
             // バッファを1ピクセル左シフトし、新しい1列を追加
             led_buffer_push_col_from_right(col_pattern);
@@ -945,39 +621,6 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
             led_render_frame(step_delay_ms);
         }
     }    
-}
-
-// 別の方法：プロポーショナル　文字ごとに実際の幅を計算する。
-// これをどこに入れるか、if(text[i] < 0x80){
-            // 'A'の時 u0041
-            // 1文字(5列)分、縦1列ずつ取り出してバッファに挿入＆レンダリング
-            // for (int col = 0; col < 5; col++) {
-            // この処理の前に入れて、出たcolを5の位置に入れれば良いか。
-for (size_t i = 0; i < len; i++) {
-    // フォントデータ(8バイト)の取得
-    // return font_table[i].data;
-//     typedef struct {
-//     wchar_t code;      // Unicode文字コード
-//     uint8_t data[8];   // 8x8ドットデータ
-// } FontItem;
-    uint8_t maxwidth = 1;
-    uint8_t char_widht = 0;
-    const uint8_t *font_data = get_font_data_ascii(text[i]);
-    for (int j = 0; j < 8; j++){
-        char_widht |= font_data[j];
-        // *font_data++;ポインタよりも配列でアクセス出来るときはした方が、
-        // 可読性もバグも減る。
-        // return font_table[i].data;が入っているので、
-        // pointerをインクリメントすれば次のdata配列に行くはず。
-    }
-    for(int k = 0; k < 8; k++){
-        if(((char_widht >> k) & 0x01) == 1) maxcol += 1;
-        // if(k==7) col += 1;
-        // 最初に1行空白確保していれば、後ろで空白列足す操作はいらない？
-    }
-    if(maxwidth < 4) maxwidth += ((7-maxwidth)/2) ;
-    // maxwidth列数が3以下なら、空白なら(7-0)/2=3+1=4,
-    // !なら((7-1)/2)=3+1=4
 }
 
 /**
@@ -1091,179 +734,3 @@ int main(void) {
 
     return 0;
 }
-
-
-
-/* 一時コメントアウト
-// -------------------------------------------------------------
-// メイン関数
-// -------------------------------------------------------------
-int main()
-{
-    stdio_init_all();
-
-    // SPI初期化 (100kHz)
-    spi_init(SPI_PORT, 100 * 1000);
-
-    // GPIOピン機能設定
-    gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
-    gpio_set_function(PIN_RCK,  GPIO_FUNC_SIO);
-
-    gpio_set_function(DMUX_A, GPIO_FUNC_SIO);
-    gpio_set_function(DMUX_B, GPIO_FUNC_SIO);
-    gpio_set_function(DMUX_C, GPIO_FUNC_SIO);
-
-    // ピンの方向を出力に設定
-    gpio_set_dir(PIN_RCK, GPIO_OUT);
-    gpio_set_dir(DMUX_A,   GPIO_OUT);
-    gpio_set_dir(DMUX_B,   GPIO_OUT);
-    gpio_set_dir(DMUX_C,   GPIO_OUT);
-
-    gpio_put(PIN_RCK, 0);
-
-    // 現在画面に表示中の 8行分のフレームバッファ（初期状態は全消灯）
-    uint8_t display_buffer[8] = {0};
-    // ●uint8_t display_buffer[8] = {0};
-    // 8×8マトリクスLEDに「今画面に映っているドット絵」情報を保持する
-    //  8バイトのメモリ領域。（ここに入れた8列分のビットデータが点灯される）
-    // 初期状態: {0} と書くことで、8行すべて 0x00（全消灯＝黒画面）からスタート。
-    // ※74HC595はLow点灯だが、display_line関数でビット反転させるのでこれでOK。
-    // ●[] = {0};
-    // 配列を {} で初期化する際、指定した要素数が配列のサイズより少ない場合
-    // 「書かれていない残りの要素は、すべて自動的に 0（または NULL）で初期化
-    // しなければならない。
-
-    // ■ASCII文字入力を使う場合は通常の strlen を使用する上行をONに
-    size_t text_length = strlen(scroll_text);
-    // size_t text_length = wcslen(scroll_text);
-    // ●wcslen() 関数：
-    // ワイド文字列の長さをワイド文字単位（文字数）で計算するC/C++の標準
-    // ライブラリ関数。ここで20行目で指定した表示させたい、ワイド文字列の
-    // 正確な文字数（要素数）を取得して size_t型の変数に保存。
-
-    while (true)
-    // ●一層目：電源が切れるまでメッセージを最初から繰り返す。
-    {
-        // 1文字ずつ順番に取り出す
-        for (size_t char_idx = 0; char_idx < text_length; char_idx++)
-        // 表示するメッセージから、0番目の文字（' '）、1番目の文字（'H'）、
-        // 2番目の文字（'e'）…と、(文字列の長さ-1)まで1文字ずつ順番に
-        // 処理対象を切り替える。
-        {   
-            // 【修正後】ASCII対応関数を呼び出す
-            const uint8_t *next_font 
-            = get_font_data_ascii(scroll_text[char_idx]);
-            // ■UTF-8版を使う場合は↑コードコメントアウトして↓コードを逆にコメント外す。
-            // 文字コードからフォントデータ（8バイト）を取得
-            // const uint8_t *next_font 
-            // = get_font_data(scroll_text[char_idx]);
-            // ●get_font_data(...): 
-            // 取り出した1文字（例: L'H'）を渡し、misaki_font.h の検索テーブルから、
-            // その文字の8バイトLEDフォントデータへの先頭アドレス
-            // （const uint8_t* ポインタ）を受け取る。
-            // ※return font_table[i].data;で返ってくる。※dataは配列名=&data[0]
-
-            // 1文字（8列）分、1ドットずつ左へシフト
-            for (int col = 0; col < 8; col++) //column=列※縦方向
-            {
-                // 各行（0〜7行）のビットを左へ1ピクセル移動し、
-                // 新しいドットを右端に追加
-                for (int row = 0; row < 8; row++) //row=行※横方向
-                {
-                    uint8_t new_bit = (next_font[row] >> (7 - col)) & 0x01;
-                    // ●① 1ピクセルを抽出する式
-                    // ●next_font[row]: 
-                    // 取得したフォントデータの row 行目（1バイト＝8ビット）。
-                    // ●(7 - col): 
-                    // フォントデータは 7ビット目が一番左のドット、
-                    // 0ビット目が一番右のドット に対応している。
-                    //  { L'\u0048', { 0xA0, 0xA0, 0xA0, 0xE0, 0xA0, 0xA0, 0xA0, 0x00 } },'H'
-                    // next_font[n]=fonta_table.data[0]=0xA0=0b10100000
-                    // next_font[n]=fonta_table.data[1]=0xA0=0b10100000
-                    // next_font[n]=fonta_table.data[2]=0xA0=0b10100000
-                    // next_font[n]=fonta_table.data[3]=0xA0=0b11100000
-                    // next_font[n]=fonta_table.data[4]=0xA0=0b10100000
-                    // next_font[n]=fonta_table.data[5]=0xA0=0b10100000
-                    // next_font[n]=fonta_table.data[6]=0xA0=0b10100000
-                    // next_font[n]=fonta_table.data[7]=0xA0=0b00000000
-                    // ◆画面バッファの初期状態 display_buffer[3] =
-                    //  0b00000000（全消灯）の時の動き。
-                    // ●col = 0（最初の列）のとき ➔ 7 - 0 = 7
-                    // （一番左のビットを抽出）
-                    //●抽出式: new_bit = (0b1110 0000 >> (7-0))&0x01
-                    // なので右へ7ビットシフト＝0b0000 0001➔new_bit = 1
-                    //●結合式: display_buffer[3] =
-                        //  (display_buffer[3] << 1) | new_bit
-                    // もとの画面: 0b00000000
-                    // << 1（左へ1ピクセルずらす） ➔ 0b00000000
-                    //  | 1（論理和の結果、右端に 1が来る ） ➔ 0b00000001
-                    // ➔ 画面の状態: ○ ○ ○ ○ ○ ○ ○ ● （右端にHの一番左の線が現れる）
-                    // ●col = 7（最後の列）のとき ➔ 7 - 7 = 0（一番右のビットを抽出）
-                    // >>（右シフト）と & 0x01（マスク演算）: 抽出したいビットを
-                    // 右端（0ビット目）まで右シフトでずらし、0x01（00000001）と論理積（AND）を
-                    // とることで、他の桁を消去して純粋な 1（点灯）か 0（消灯）だけを取り出す。
-                    // この1ビットずらす作業を1～8行すべてに行う。
-
-                    display_buffer[row] =
-                     (display_buffer[row] << 1) | new_bit;
-                    // ●display_buffer[row] << 1
-                    // ➔画面全体をベルトコンベアのように1ピクセル左へ送り出している。
-                    // ●| new_bit
-                    // ➔押し出されて空いた右端の1ピクセル枠に、フォントからくり抜いた
-                    // 次のドット（1か0）をパズルハメしている。
-                    // ● (display_buffer[row] << 1): 
-                    // 現在画面に映っている行データを 左に1ビット（1ピクセル）左シフト。
-                    // これにより、画面全体のドットが左へ1ピクセル押し出され、
-                    // 一番右端（0ビット目）が 0（空き）になる。
-                    // | new_bit: 論理和（OR）演算子 を使い、空いた右端の0ビット目に、
-                    // 先ほど抽出した新しい1ピクセル new_bit を追加する。
-                }
-
-                // 1ドットシフトした状態でダイナミック点灯（表示スピード調整）
-                for (int frame = 0; frame < 18; frame++)
-                {
-                    for (uint8_t row = 0; row < 8; row++)
-                    {   
-                        // 【修正後】上下（7 - row）を渡す。
-                        display_line(7 - row, display_buffer[row]);
-
-                        // display_line(row, display_buffer[row]);
-                        // ビット操作し作った表示行の点灯パターンを
-                        //（表示行を選択＆その列の点灯パターンを）渡して点灯。
-                        sleep_us(2000); // 2ms待機
-                    }
-                    // なにをしているのか？: 
-                    // 1ピクセル左へ動かした状態の画面バッファ（display_buffer）
-                    // を、人間の目で見える時間だけ静止して点灯保持
-                    // （表示スピードの制御）。
-                    // スピード決定の時間の計算display_line(...) ＋
-                    //  sleep_us(2000): 1行分を描画して 2000μs（2ミリ秒）待機。
-                    // この frame < 6 の 6 や sleep_us(2000) の数値を変更する
-                    // ことで、スクロールのスピードを速くしたり遅くしたり出来る。
-                }
-            }
-        }
-    }
-}
-// 文字方向についてチェック。
-//{ L'\u0041', { 0x40, 0xA0, 0xA0, 0xA0, 0xE0, 0xA0, 0xA0, 0x00 } }, // 'A'
-// 0b0100 0000
-// 0b1010 0000
-// 0b1010 0000
-// 0b1010 0000
-// 0b1110 0000
-// 0b1010 0000
-// 0b1010 0000
-// 0b0000 0000
-// { L'\u3093', { 0x10, 0x10, 0x20, 0x30, 0x4A, 0x4A, 0x84, 0x00 } }, // 'ん'
-// 0b0001 0000
-// 0b0001 0000
-// 0b0010 0000
-// 0b0011 0000
-// 0b0100 1010
-// 0b0100 1010
-// 0b0000 0000
-
-
-一時コメントアウト*/
