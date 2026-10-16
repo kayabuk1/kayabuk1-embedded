@@ -1,9 +1,16 @@
 /*◆やることリスト（一部学習として身に着けておきたいことも含む）
+抜けているもの：ステップ0（v1の完成）
+実機で確認する（ゴースト、シフト方向、スクロール）
+動画かGIFを撮る
+README を書く
+先生に公開してよいか確認する
+GitHubで公開する
+
 ●動作トレースや原理などのコメントの追記修正
 ★miskaiフォントの英数字が半角で幅が4前後で文字と文字間の空白が大きくなって
 　しまっている問題。
-★misakiフォントのクレジットを記載する。
-
+	
+	済★misakiフォントのクレジットを記載する。
     済●led_buffer_shift_colsの向きがコメントと逆
     済●時間の計算が、定数を変えると止まる作り
     済●ゴースト（残像）が出る可能性⇒blanking消灯関数をhw部にも作成
@@ -13,7 +20,8 @@
     済●led_render_test_one_by_oneは「render」の誤字で、
 　　    test_accumulate_dots_animationとほぼ同じ内容です。
 　　　  ⇒累積1ドット点灯と非累積1ドット点灯で実際に動かすと点灯の仕方がまるで違って興味深いので残しておく。
-済？●led_buffer_push_col_from_leftも「right」の誤字です。
+        ⇒削除。累積と非累積の比較は test_accumulate_dots_animation と test_one_by_one_dot_animation で確認できる
+    済？●led_buffer_push_col_from_leftも「right」の誤字です。
 
 ●ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第です。
 今の環境（GCC、ARM）では動きますが、移植性はありません。
@@ -115,7 +123,7 @@ led_matrix->bytes[].(⇐ここのドットもアローに出来る？) x0での�
 //         led_render_scan_once();
 //         end_time = time_us_32()/1000;
 //         // elapsed_ms += end_time - start_time;
-//         // elapsed_ms += FRAME_SCAN_TIME_MS; // 1周で約16ms経過
+//         // elapsed_ms += FRAME_SCAN_TIME_MS; // 1周で約2ms経過
 //     }
 // }
 // // C言語の符号なし32ビット整数（uint32_t）で 0 - 10 を計算すると、数値がループして
@@ -683,14 +691,14 @@ void led_buffer_push_col_from_right(uint8_t new_rightend_col_data) {
         = (led_matrix_buffer.bytes[y] >> 1) | (new_bit <<7);
         // 5列目の8bitデータex:0b0111_1010なら画面左へ動かすならx0方向にシフトする
         // ので、⇒1シフトして0b新0|011_1101|旧0、newbit0b1000_0000これと論理和して
-        // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
+        // 0b1011_1101これで5列目の8bit全データを上書きして1ビットずれた様に。
         // これを7行分繰り返す。
     }
 }
 
 /**
  * @brief 画面バッファ全体を1ピクセル右⇒へ送り出し、左⇐端列に新しい1列データを追加
- * @param[in] new_leftend_col_data 右端(x=7列目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
+ * @param[in] new_leftend_col_data 左端(0bit目)に追加挿入する縦1列分(8bit ex:0b1111_0000)のデータ
  */
 void led_buffer_push_col_from_left(uint8_t new_leftend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
@@ -828,7 +836,7 @@ void led_render_frame(uint32_t duration_ms) {
     absolute_time_t end_time = make_timeout_time_ms(duration_ms);
     
     //没 uint32_t elapsed_ms = 0;
-    // 1回の scan_once に約16msかかるため、
+    // 1回の scan_once に約2msかかるため、
     // 経過時間を計算しながらループする
     // 🔹 なぜ duration_ms（表示時間）は uint32_t なのか？
     // duration ＝ 持続時間 / 表示する時間
@@ -870,21 +878,25 @@ void led_render_blink(uint32_t interval_ms, uint8_t times) {
     }
 }
 
-/**
- * 1ドットずつ順番に点灯していくテストアニメーション関数
- */
-void led_render_test_one_by_one(void){
-    for (int y = 0; y < 8; y++) {
-        for (int x = 0; x < 8; x++) {
-            // 内部で switch(x) が働いて
-            // .x0 〜 .x7 へアクセスして(x,y)LEDに１をセット
-            led_buffer_set_pixel(x, y, ON);
-            // 2. そのバッファ状態を 100ms 間ダイナミック点灯表示する！
-            led_render_frame(100);
-        }
-    }
-}
-
+// 文字のドットパターンについて確認
+//{ L'\u0041', { 0x40, 0xA0, 0xA0, 0xA0, 0xE0, 0xA0, 0xA0, 0x00 } }, // 'A'
+// 0b 0100 0|000
+// 0b 1010 0|000
+// 0b 1010 0|000
+// 0b 1010 0|000
+// 0b 1110 0|000
+// 0b 1010 0|000
+// 0b 1010 0|000
+// 0b 0000 0|000
+// ⇒5文字目まででカットしてOK。右端が隣の文字との空隙になる。
+// { L'\u3093', { 0x10, 0x10, 0x20, 0x30, 0x4A, 0x4A, 0x84, 0x00 } }, // 'ん'
+// 0b 0001 0000
+// 0b 0001 0000
+// 0b 0010 0000
+// 0b 0011 0000
+// 0b 0100 1010
+// 0b 0100 1010
+// 0b 0000 0000
 /**
  * @brief 指定した文字列を1ドットずつスムーズに左スクロール表示する関数
  * @param[in] text スクロール表示させる文字列(ASCII)
@@ -897,24 +909,75 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
     for (size_t i = 0; i < len; i++) {
         // フォントデータ(8バイト)の取得
         const uint8_t *font_data = get_font_data_ascii(text[i]);
-
-        // 1文字(8列)分、1列ずつ取り出してバッファに挿入＆レンダリング
-        for (int col = 0; col < 8; col++) {
-            // 文字フォントから1列分(縦方向8ビット)を構成
+        // data[i] は i番目の要素の値。アドレスは &data[i]（または data + i）になる。
+        // return font_table[i].data;今回戻って来るデータは、data[]配列のdataと言う配列名
+        // の形になっている。配列名だけの時は内部的に&data[0]という配列の0番目の要素への
+        // アドレスとして扱われる。なのでそれに間接参照*を付けた*font_dataはdata配列の
+        // 最初の要素の8bitデータへのアクセスになる。その場合0番目が0x00だった場合NULL
+        // 扱いになり文字が取得されない。その為、font_dataというポインタ自身がNULLだった
+        // （どこも指していなかった）ら、その文字の処理分の1ループをcontinueでスキップする
+        // のが適切。
+        if (font_data == NULL) continue;
+        int maxwidth = ((unsigned char)text[i] < 0x80) ? 5 : 8;
+        // char を符号付きとして扱うコンパイラでは、0x80以上の値が負の数に。
+        // そうなると < 0x80 が常に真になってしまうので、unsigned char型にキャストして、
+        // 判定に利用する。※上は三項演算子の記述の仕方。
+        // 0x80(128)未満は半角になるので、縦5列までにする
+        // ※「実機で見て隙間2列が読みやすかったため」
+        // 'A'の時 u0041
+        // 1文字(5列)分、縦1列ずつ取り出してバッファに挿入＆レンダリング
+        for (int col = 0; col < maxwidth; col++) {
             uint8_t col_pattern = 0;
+            // ↓文字フォントから1列分(縦方向8ビット)をループで各行から取り出す。
             for (int row = 0; row < 8; row++) {
-                // (7 - col) でフォントの左端から抽出
+                // (7 - col) でフォントの左端(bit7)から抽出
                 uint8_t bit = (font_data[row] >> (7 - col)) & 0x01;
+                // bit7~bit3までが必要なので、(7 - col)のままで良い。
+                // col=1,row=0,font_data[0]==0b 0100 0000の時
+                // 7-1=6右シフト0b0000_0001 & 0x01で6ビット目を取り出せた。
                 col_pattern |= (bit << row);
+                // これを、row=0行目なので0シフト(そのまま)し、初期値0x00と論理和
+                // colpattern==0x01が格納。これを縦1列データ分繰り返す。
             }
-
             // バッファを1ピクセル左シフトし、新しい1列を追加
             led_buffer_push_col_from_right(col_pattern);
-
             // 指定時間ぶんダイナミック点灯描画
             led_render_frame(step_delay_ms);
         }
+    }    
+}
+
+// 別の方法：プロポーショナル　文字ごとに実際の幅を計算する。
+// これをどこに入れるか、if(text[i] < 0x80){
+            // 'A'の時 u0041
+            // 1文字(5列)分、縦1列ずつ取り出してバッファに挿入＆レンダリング
+            // for (int col = 0; col < 5; col++) {
+            // この処理の前に入れて、出たcolを5の位置に入れれば良いか。
+for (size_t i = 0; i < len; i++) {
+    // フォントデータ(8バイト)の取得
+    // return font_table[i].data;
+//     typedef struct {
+//     wchar_t code;      // Unicode文字コード
+//     uint8_t data[8];   // 8x8ドットデータ
+// } FontItem;
+    uint8_t maxwidth = 1;
+    uint8_t char_widht = 0;
+    const uint8_t *font_data = get_font_data_ascii(text[i]);
+    for (int j = 0; j < 8; j++){
+        char_widht |= font_data[j];
+        // *font_data++;ポインタよりも配列でアクセス出来るときはした方が、
+        // 可読性もバグも減る。
+        // return font_table[i].data;が入っているので、
+        // pointerをインクリメントすれば次のdata配列に行くはず。
     }
+    for(int k = 0; k < 8; k++){
+        if(((char_widht >> k) & 0x01) == 1) maxcol += 1;
+        // if(k==7) col += 1;
+        // 最初に1行空白確保していれば、後ろで空白列足す操作はいらない？
+    }
+    if(maxwidth < 4) maxwidth += ((7-maxwidth)/2) ;
+    // maxwidth列数が3以下なら、空白なら(7-0)/2=3+1=4,
+    // !なら((7-1)/2)=3+1=4
 }
 
 /**
@@ -946,6 +1009,7 @@ void test_pixel_control(void) {
  */
 void test_accumulate_dots_animation(void) {
     led_buffer_clear_all();
+    // バファクリアはループ前に一度だけ。
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
             led_buffer_set_pixel(x, y, ON);
@@ -961,6 +1025,7 @@ void test_one_by_one_dot_animation(void) {
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
             led_buffer_clear_all();
+            // ループの度にバファをクリア
             led_buffer_set_pixel(x, y, ON);
             led_render_frame(50);
         }

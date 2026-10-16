@@ -1,3 +1,26 @@
+/**
+ * @file misaki_font.h
+ * @brief 8x8 ドット日本語フォント「美咲フォント」データ定義
+ *
+ * ---------------------------------------------------------------------------
+【フォントクレジット】
+ *  8×8 ドット日本語フォント「美咲フォント」(2021-05-05 版)
+ *  Copyright(C) 2002-2021 Num Kadoma（門真なむ）
+ *  Website : http://littlelimit.net/
+ *  ※本ファイルは同フォントのグリフを C 言語の配列データに変換したものです（改変あり）。
+ *
+ * 【License（同梱 readme より原文）】
+ *  These fonts are free softwares.
+ *  Unlimited permission is granted to use, copy, and distribute it, with or
+ *  without modification, either commercially and noncommercially.
+ *  THESE FONTS ARE PROVIDED "AS IS" WITHOUT WARRANTY.
+ *
+ *  これらのフォントはフリー（自由な）ソフトウエアです。
+ *  あらゆる改変の有無に関わらず、また商業的な利用であっても、自由にご利用、
+ *  複製、再配布することができますが、全て無保証とさせていただきます。
+ * ---------------------------------------------------------------------------
+ */
+
 #ifndef MISAKI_FONT_H //① もし「MISAKI_FONT_H」という目印がまだ定義されていなければ…
 #define MISAKI_FONT_H //② 「MISAKI_FONT_H」という目印（フラグ）を立てる。
 // ●#ifndef, #define, #endif（インクルードガード）

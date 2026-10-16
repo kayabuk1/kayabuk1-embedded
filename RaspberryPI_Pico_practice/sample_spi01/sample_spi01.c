@@ -112,7 +112,55 @@ int main()
         // gpio_put(PIN_SCK, 1);
         // sleep_us(10);
 
-        uint8_t data = 0xCC;
+        uint8_t data = 0b01010101;
+        // spi_write_blocking(SPI_PORT, &data, 1);
+        // // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        // gpio_put(PIN_RCK, 1);
+        // sleep_us(10);
+        // gpio_put(PIN_RCK, 0);
+        // sleep_us(10);
+        // // sleep_ms(100);
+
+        // gpio_put(MUX_A, 0);
+        // gpio_put(MUX_B, 0);
+        // gpio_put(MUX_C, 0);
+
+        // gpio_put(MUX_OFF, 1);
+
+        // sleep_us(100);
+
+        spi_write_blocking(SPI_PORT, &data, 1);
+        // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        gpio_put(PIN_RCK, 1);
+        sleep_us(10);
+        gpio_put(PIN_RCK, 0);
+        sleep_us(10);
+        // sleep_ms(100);
+
+        gpio_put(MUX_A, 1);
+        gpio_put(MUX_B, 0);
+        gpio_put(MUX_C, 0);
+
+        gpio_put(MUX_OFF, 1);
+
+        sleep_us(100);
+
+        spi_write_blocking(SPI_PORT, &data, 1);
+        // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        gpio_put(PIN_RCK, 1);
+        sleep_us(10);
+        gpio_put(PIN_RCK, 0);
+        sleep_us(10);
+        // sleep_ms(100);
+
+        gpio_put(MUX_A, 0);
+        gpio_put(MUX_B, 1);
+        gpio_put(MUX_C, 0);
+
+        gpio_put(MUX_OFF, 1);
+
+        sleep_us(100);
+
         spi_write_blocking(SPI_PORT, &data, 1);
         // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
         gpio_put(PIN_RCK, 1);
@@ -123,11 +171,74 @@ int main()
 
         gpio_put(MUX_A, 0);
         gpio_put(MUX_B, 0);
+        gpio_put(MUX_C, 1);
+
+        gpio_put(MUX_OFF, 1);
+
+        sleep_us(100);
+
+        spi_write_blocking(SPI_PORT, &data, 1);
+        // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        gpio_put(PIN_RCK, 1);
+        sleep_us(10);
+        gpio_put(PIN_RCK, 0);
+        sleep_us(10);
+        // sleep_ms(100);
+
+        gpio_put(MUX_A, 1);
+        gpio_put(MUX_B, 0);
+        gpio_put(MUX_C, 1);
+
+        gpio_put(MUX_OFF, 1);
+
+        sleep_us(100);
+
+        spi_write_blocking(SPI_PORT, &data, 1);
+        // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        gpio_put(PIN_RCK, 1);
+        sleep_us(10);
+        gpio_put(PIN_RCK, 0);
+        sleep_us(10);
+        // sleep_ms(100);
+
+        gpio_put(MUX_A, 1);
+        gpio_put(MUX_B, 1);
         gpio_put(MUX_C, 0);
 
         gpio_put(MUX_OFF, 1);
 
         sleep_us(100);
 
+        spi_write_blocking(SPI_PORT, &data, 1);
+        // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        gpio_put(PIN_RCK, 1);
+        sleep_us(10);
+        gpio_put(PIN_RCK, 0);
+        sleep_us(10);
+        // sleep_ms(100);
+
+        gpio_put(MUX_A, 1);
+        gpio_put(MUX_B, 1);
+        gpio_put(MUX_C, 1);
+
+        gpio_put(MUX_OFF, 1);
+
+        sleep_us(100);
+
+        spi_write_blocking(SPI_PORT, &data, 1);
+        // 最後にラッチ、データをｼﾌﾄﾚｼﾞｽﾀに読み込ませる。
+        gpio_put(PIN_RCK, 1);
+        sleep_us(10);
+        gpio_put(PIN_RCK, 0);
+        sleep_us(10);
+        // sleep_ms(100);
+
+        gpio_put(MUX_A, 0);
+        gpio_put(MUX_B, 1);
+        gpio_put(MUX_C, 1);
+
+        gpio_put(MUX_OFF, 1);
+
+        sleep_us(100);
     }
 }
