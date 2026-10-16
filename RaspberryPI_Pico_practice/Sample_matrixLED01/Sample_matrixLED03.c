@@ -1,5 +1,5 @@
 /**
- * @file Sample_matrixLED03_refactored.c
+ * @file Sample_matrixLED03.c
  * @brief Raspberry Pi Pico 8x8 LEDマトリクス制御プログラム
  * @details 74HC595(列カソード/SPI)および74HC138(行アノード/GPIO)を
  * 用いたダイナミック点灯制御ライブラリ
@@ -116,7 +116,7 @@ static const char scroll_text[] = " HELLO PICO! 12345 ";
 static inline uint8_t reverse_bits(uint8_t b);
 static inline void hw_matrix_led_blanking(void);
 static inline void hw_matrix_select_active_row(uint8_t row);       
-static void        hw_matrix_output_line(uint8_t row, uint8_t line_data); 
+static inline void hw_matrix_output_line(uint8_t row, uint8_t line_data); 
 
 /**
  * @brief 8ビットデータのLSD/MSBビット順逆転関数
@@ -144,11 +144,6 @@ static inline void hw_matrix_led_blanking(void){
     sleep_us(1);
     gpio_put(PIN_RCK, 0);
 }
-// 没hw_matrix_select_active_row(row)（74HC138のGPIOピン操作） も毎回実行無駄な為
-// static inline void hw_matrix_led_blanking(uint8_t ago_row){
-//     uint8_t clear_line_data = 0x00;
-//     hw_matrix_output_line(uint8_t ago_row, uint8_t clear_line_data);
-// }
 
 /**
  * @brief 74HC138 (デコーダ/アノード行選択※点灯行選択) 出力設定関数
@@ -160,7 +155,7 @@ static inline void hw_matrix_select_active_row(uint8_t row)
     gpio_put(DMUX_B, (row >> 1) & 0x01); // 1ビット目
     gpio_put(DMUX_C, (row >> 2) & 0x01); // 2ビット目
     // ●74HC138との連携：74HC138は、3本のバイナリ入力端子(A,B,C)の「H/L」の
-    // 組み合わせで8本の出力端子(Y0~Y7)のどれか「１つ」に「Low」を出力する、
+    // 組み合わせで8本の出力端子(Y0~Y7)のどれか「１つ」に「Low」を出力する。
 }
 
 /**
@@ -169,7 +164,7 @@ static inline void hw_matrix_select_active_row(uint8_t row)
  * @param[in] line_data 表示させる1行分(8ドット)の点灯パターン (1=ON, 0=OFF)
  * @note カソード制御のため、内部でビット反転(~)を行って送信します。
  */
-void hw_matrix_output_line(uint8_t row, uint8_t line_data)
+static　inline　void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {   
     // ●uint8_t row: 表示対象の行番号（0 〜 7）。
     // uint8_t line_data: その行に表示させたい 1行分（8ドット）のLED点灯パターン。
@@ -203,7 +198,7 @@ void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 void init_hardware(void) {
     stdio_init_all();
 
-    // SPI初期化 (100kHz⇒1000kHzに変更)
+    // SPI初期化 (100kHz⇒1000kHz(1MHz)に変更)
     spi_init(SPI_PORT, 1000 * 1000);
 
     // SPI通信(74HC595)用ピン機能設定
@@ -243,7 +238,6 @@ void led_buffer_clear_all(void);
 void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
     // 範囲外ガード（0〜7以外の値が入ってきたら何もしない）
     if (y >= 8 || x >= 8) return;
-    // ビットフィールドメンバには配列に
     // x の値（0〜7）に応じて、対応するビットフィールドメンバに直接代入
     switch (x) {
         case 0: led_matrix_buffer.grid[y].x0 = on_off; break;
@@ -289,7 +283,7 @@ bool led_buffer_get_pixel(uint8_t x, uint8_t y){
 void led_buffer_clear_all(void){
      for (int i = 0; i < 8; i++) {
         led_matrix_buffer.bytes[i] = 0x00; //0b0000 0000
-        // 共有体の8ビットごと扱えるbytes[]でアクセスして全部0に。
+        // 共用体の8ビットごと扱えるbytes[]でアクセスして全部0に。
     }
 }
 
@@ -363,7 +357,7 @@ uint8_t led_buffer_get_col(uint8_t x) {
     uint8_t col_data = 0;
     for (uint8_t y = 0; y < 8; y++) {
         if (led_buffer_get_pixel(x, y)) {
-            // LEDブッファの1ピクセルの状態が点灯ならif内処理
+            // LEDバッファの1ピクセルの状態が点灯ならif内処理
             col_data |= (1 << y);
         }
     }
@@ -652,7 +646,7 @@ void test_pixel_control(void) {
  */
 void test_accumulate_dots_animation(void) {
     led_buffer_clear_all();
-    // バファクリアはループ前に一度だけ。
+    // バッファクリアはループ前に一度だけ。
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
             led_buffer_set_pixel(x, y, ON);
@@ -668,7 +662,7 @@ void test_one_by_one_dot_animation(void) {
     for (uint8_t y = 0; y < 8; y++) {
         for (uint8_t x = 0; x < 8; x++) {
             led_buffer_clear_all();
-            // ループの度にバファをクリア
+            // ループの度にバッファをクリア
             led_buffer_set_pixel(x, y, ON);
             led_render_frame(50);
         }
