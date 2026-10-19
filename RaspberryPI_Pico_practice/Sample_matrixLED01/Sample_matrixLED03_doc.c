@@ -1,13 +1,11 @@
-// ◆こちらのファイルはコードを作成する際に書いた解説など雑多なコメントが含まれたコード。
+#if 0 // ◆こちらのファイルはコードを作成する際に書いた解説など雑多なコメントが含まれたコード。
 // 　完成後こちらも内容整理予定。
 
 /*◆やることリスト（一部学習として身に着けておきたいことも含む）
 抜けているもの：ステップ0（v1の完成）
-実機で確認する（ゴースト、シフト方向、スクロール）
-動画かGIFを撮る
-README を書く
-GitHubで公開する
-
+    済：●実機で確認する（ゴースト、シフト方向、スクロール）
+    済：●動画かGIFを撮る
+    一旦済：●README を書く
 ●動作トレースや原理などのコメントの追記修正
 
 ★miskaiフォントの英数字が半角で幅が4前後で文字と文字間の空白が大きくなって
@@ -23,7 +21,7 @@ GitHubで公開する
 　　    test_accumulate_dots_animationとほぼ同じ内容。
 　　　  ⇒累積1ドット点灯と非累積1ドット点灯で実際に動かすと点灯の仕方がまるで違って興味深いので残しておく。
         ⇒削除。累積と非累積の比較は test_accumulate_dots_animation と test_one_by_one_dot_animation で確認できる
-    済？●led_buffer_push_col_from_leftも「right」の誤字。
+    済●led_buffer_push_col_from_leftも「right」の誤字。
 
 ◆ビットフィールドの並び順（x0がbit0になるか）は、C言語の規格ではコンパイラ次第。
 今の環境（GCC、ARM）では動きるが、移植性はない。
@@ -69,8 +67,7 @@ GCCでもClangでも、ARM向けであれば同じ構造体レイアウトにな
 switch版をコメントアウトしててもらう。
 ビット演算版の利点は、bytes[y] を扱う他の関数と書き方がそろうこと、短く書けること。
 訓練校での環境は皆同じPicoなので問題ないと考える。
-// ※両者が同じ結果になるのは、x0 が bit0 に割り付けられる環境
-（GCC + ARM / AAPCS）のため。
+⇒#define USE_BIT_SHIFT 0   // 1にするとビット演算版に切り替わる仕組みに変更。
 
 ◆下のあたりのハードウェアアトミックなレジスタ操作を組み込んでより安全に高速に。
     gpio_set_mask();
@@ -207,25 +204,24 @@ static を付けた変数は、自動的に0で初期化される。
 最外（Z軸）	キューブの「高さ（レイヤー）」	led_cube[z] （0〜7の計8面）
 中間（Y軸）	1面の中の「行（ライン）」	led_cube[z].bytes[y] （0〜7の計8行）
 最内（X軸）	1行の中の「列（ビット）」	(led_cube[z].bytes[y] >> x) & 0x01 （8ビット）
-// /**
-//  * @brief 8x8 LEDフレームバッファ（1面分）の共用体
-//  */
+
+/**
+ * @brief 8x8 LEDフレームバッファ（1面分）の共用体
+ */
 // typedef union {
-//     uint8_t  bytes[8];    /**< SPI送信・一括処理用の8バイト配列 */
-//     RowBits  grid[8];     /**< (x, y) 座標ビットフィールド配列 */
-//     uint64_t all_bits;    /**< 1面全体(64ビット)を一括クリア・コピーするための変数 */
+//     uint8_t  bytes[8];    //< SPI送信・一括処理用の8バイト配列 
+//     RowBits  grid[8];     //< (x, y) 座標ビットフィールド配列 
+//     uint64_t all_bits;    //< 1面全体(64ビット)を一括クリア・コピーするための変数
 // } LEDBuffer_t;
 // これを8面分用意する
 // static LEDBuffer_t led_cube[8];
 // led_cube[z].grid[y].x3 = 1;  // 座標 (X:3, Y:y, Z:z) を点灯
-
-/*s
-●プログラムファイルの分割
-・グローバル変数を減らす。
-・内部的なデータおよび関数にstaticを付ける。
-・inline化が望ましい関数にはinlineを付ける。
+// ●プログラムファイルの分割
+// ・グローバル変数を減らす。
+// ・内部的なデータおよび関数にstaticを付ける。
+// ・inline化が望ましい関数にはinlineを付ける。
 */
-
+#endif
 
 
 /**
@@ -272,7 +268,8 @@ static を付けた変数は、自動的に0で初期化される。
 // v (value値 や variable変数の略でよく使われる)
 // v |=  BIT(3);              // セット：第3ビットを1に
 // v &= (uint8_t)~BIT(1);     // クリア 
-// 　※unsigned int 0x0000_0001 ⇒ 0xFFFF_FFFE ⇒ キャスト ⇒ 0b1111_1110 と論理積 ⇒ bit1だけ0になる。※他の値はそのまま
+// 　※unsigned int 0x0000_0010 ⇒ 0xFFFF_FFFD ⇒ キャスト ⇒ 0b1111_1101 と論理積 
+//     ⇒ bit1だけ0になる。※他の値はそのまま
 // v ^=  BIT(n);              // 反転 フラグを反転などに（TOGGLE）操作。
 // if (v & BIT(3)) { ... }    // 判定  // 第3ビットが1の場合の処理
 //●なぜ反転(uint8_t)でキャストする？
@@ -290,6 +287,7 @@ static を付けた変数は、自動的に0で初期化される。
 // キャストの主な役割は、意図をはっきり示すことと、コンパイラの警告（-Wconversion）を消すこと。
 // キャストが本当に必要になるのは、if (~v == 0xFE) のように、拡張された値をそのまま比べる場面
 
+#define USE_BIT_SHIFT 0   // 1にするとビット演算版に切り替わる
 
 // -------------------------------------------------------------
 // タイマー・周波数に関する定数定義 (500Hz 設定)
@@ -449,10 +447,10 @@ static const char scroll_text[] = " HELLO PICO! 12345 ";
 static inline uint8_t reverse_bits(uint8_t b);
 static inline void hw_matrix_led_blanking(void);
 static inline void hw_matrix_select_active_row(uint8_t row);       
-static void        hw_matrix_output_line(uint8_t row, uint8_t line_data); 
+static inline void hw_matrix_output_line(uint8_t row, uint8_t line_data); 
 
 /**
- * @brief 8ビットデータのLSD/MSBビット順逆転関数
+ * @brief 8ビットデータのLSB/MSBビット順逆転関数
  * @param[in] b 対象の8ビットデータ
  * @return ビット順が前後反転した8ビットデータ
  */
@@ -531,7 +529,7 @@ static inline void hw_matrix_select_active_row(uint8_t row)
  * @param[in] line_data 表示させる1行分(8ドット)の点灯パターン (1=ON, 0=OFF)
  * @note カソード制御のため、内部でビット反転(~)を行って送信する。
  */
-void hw_matrix_output_line(uint8_t row, uint8_t line_data)
+static inline void hw_matrix_output_line(uint8_t row, uint8_t line_data)
 {   
     // ●uint8_t row: 表示対象の行番号（0 〜 7）。
     // uint8_t line_data: その行に表示させたい 1行分（8ドット）のLED点灯パターン。
@@ -648,10 +646,21 @@ void led_buffer_clear_all(void);
 void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
     // 範囲外ガード（0〜7以外の値が入ってきたら何もしない）
     if (y >= 8 || x >= 8) return;
+    #if USE_BIT_SHIFT
+    // ◆ビットシフト版 #define USE_BIT_SHIFT 0  を 1 にするとビット演算版に切り替わる。
+    // ※両者が同じ結果になるのは、x0 が bit0 に割り付けられる環境
+    // （GCC + ARM / AAPCS）のため。
+    if(on_off){ //ONが渡されたら点灯
+        led_matrix_buffer.bytes[y] |= BIT(x);
+    }else{ //OFFが渡されたら消灯
+        led_matrix_buffer.bytes[y] &= (uint8_t)~BIT(x);
+    }
+    #else
+    switch (x) {
+    // switch文だと直感的に操作が出来るが、標準的なのはビット演算。
     // ビットフィールドメンバは配列にできない
     // （grid[y].x[n] のように添字で指定できない）為、
     // x の値（0〜7）に応じて、対応するビットフィールドメンバに直接代入
-    switch (x) {
         case 0: led_matrix_buffer.grid[y].x0 = on_off; break;
         case 1: led_matrix_buffer.grid[y].x1 = on_off; break;
         case 2: led_matrix_buffer.grid[y].x2 = on_off; break;
@@ -661,16 +670,8 @@ void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
         case 6: led_matrix_buffer.grid[y].x6 = on_off; break;
         case 7: led_matrix_buffer.grid[y].x7 = on_off; break;
     }
+    #endif
 }
-// ◆ビットシフト版
-// void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
-//     if(y >= 8 || x >= 8) return;
-//     if(on_off){ //ONが渡されたら点灯
-//         led_matrix_buffer.bytes[y] |= BIT(x);
-//     }else{ //OFFが渡されたら消灯
-//         led_matrix_buffer.bytes[y] &= (uint8_t)~BIT(x);
-//     }
-// }
 
 /**
  * @brief 指定座標(x, y)のピクセル状態を取得
@@ -681,6 +682,16 @@ void led_buffer_set_pixel(uint8_t x, uint8_t y, bool on_off){
 bool led_buffer_get_pixel(uint8_t x, uint8_t y){
     if (y >= 8 || x >= 8) return false;
     // 戻り値の型が boolのため、早期リターンも何かboolを返す必要がある。
+    // x と y が uint8_t なので、誰かが −1 を渡しても 255 に変換
+    // される。>= 8 のチェックで、それも弾ける。意図していなかった汗。
+    #if USE_BIT_SHIFT
+    // ◆ビットシフト版　#define USE_BIT_SHIFT 0  を 1 にするとビット演算版に切り替わる。
+        return ((led_matrix_buffer.bytes[y] >> x) & 0x01) ;
+    // ex:x = 4,bytes[y]=0b0001_0000とする。
+    // (0b0001_0000 >> x) & 0x01 ※xビット分シフトして、
+    // 0x01と論理積して狙いのピクセルのビットを取り出して、
+    // return で返す。& 0x01 で他の桁を消しているので01しか返らない＝true,falseのみ
+    #else
     switch (x) {
         case 0: return led_matrix_buffer.grid[y].x0;
         case 1: return led_matrix_buffer.grid[y].x1;
@@ -695,18 +706,8 @@ bool led_buffer_get_pixel(uint8_t x, uint8_t y){
         // x0（1ビット）しか入っていないので自動的にtrue/falseになる。
     }
     return false; // ここに来ることはないが、コンパイラ警告回避のために追加
+    #endif
 }
-// // ◆ビットシフト版
-// bool led_buffer_get_pixel(uint8_t x, uint8_t y){
-//     if (y >= 8 || x >= 8) return;
-//     // x と y が uint8_t なので、誰かが −1 を渡しても 255 に変換
-//     // される。>= 8 のチェックで、それも弾ける。意図していなかった汗。
-//     return ((led_matrix_buffer.bytes[y] >> x) & 0x01) ;
-//     // ex:x = 5,bytes[y]=0b0001_0000とする。
-//     // (0b0001_0000 >> x) & 0x01 ※xビット分シフトして、
-//     // 0x01と論理積して狙いのピクセルのビットを取り出して、
-//     // return で返す。uint8_t型なので01しか返らない＝true,falseのみ
-// }
 
 
 /**
@@ -831,6 +832,7 @@ void led_buffer_push_col_from_left(uint8_t new_leftend_col_data);
  */
 void led_buffer_shift_cols(int offset_times) {
     if (offset_times == 0) return;
+    if(abs(offset_times) >= 8){ led_buffer_clear_all; return;}
 
     if (offset_times > 0) { // 右シフト (x7方向へ詰める)
         for (uint8_t y = 0; y < 8; y++) {
@@ -857,6 +859,7 @@ void led_buffer_shift_cols(int offset_times) {
  */
 void led_buffer_shift_rows(int offset_times) {
     if (offset_times == 0) return;
+    if(abs(offset_times) >= 8){ led_buffer_clear_all; return;}
 
     if (offset_times > 0) { // 上シフト (y=0方向へ移動、下端に0を補填)
         for (int y = 0; y < 8; y++) {
@@ -864,10 +867,10 @@ void led_buffer_shift_rows(int offset_times) {
                 // y方向(上)に3行シフトなら0+3=3。4,5,6,7の5回まで移動
                 led_matrix_buffer.bytes[y] 
                 = led_matrix_buffer.bytes[y + offset_times];
-                // 8bit横一列一括で扱う。0列目(最上が0,最下が7)
-                // 0列目を0+3列目で上書き。次ループ1列目に4列目を上書き。
+                // 8bit横一列一括で扱う。0行目(最上が0,最下が7)
+                // 0行目を3行目で上書き。次ループ1行目に4行目を上書き。
             } else {
-                // y+offset_times=8,9,10の残り下3列は全て0を詰める。
+                // y+offset_times=8,9,10の残り下3行は全て0を詰める。
                 led_matrix_buffer.bytes[y] = 0x00;
             }
         }
@@ -906,10 +909,10 @@ void led_buffer_push_col_from_right(uint8_t new_rightend_col_data) {
         // 右端に追加するのでx7の位置まで左シフトして0b1000_0000
         led_matrix_buffer.bytes[y] 
         = (led_matrix_buffer.bytes[y] >> 1) | (new_bit <<7);
-        // 5列目の8bitデータex:0b0111_1010なら画面左へ動かすならx0方向にシフトする
+        // 5行目の8bitデータex:0b0111_1010なら画面左へ動かすならx0方向にシフトする
         // ので、⇒1シフトして0b新0|011_1101|旧0、newbit0b1000_0000これと論理和して
-        // 0b1011_1101これで5列目の8bit全データを上書きして1ビットずれた様に。
-        // これを7行分繰り返す。
+        // 0b1011_1101これで5行目の8bit全データを上書きして1ビットずれた様に。
+        // これを8行分繰り返す。
     }
 }
 
@@ -921,16 +924,16 @@ void led_buffer_push_col_from_left(uint8_t new_leftend_col_data) {
     for (uint8_t y = 0; y < 8; y++) {
         uint8_t new_bit = (new_leftend_col_data >> y) & 0x01;
         // 次の左端列データが0b1101_1011で5ループ目なら、
-        // (new_rightend_col_data >> y) & 0x01
+        // (new_leftend_col_data >> y) & 0x01
         // ⇒5シフトして0b0000_1101これと0b0000_0001の論理積で、
         // 5ビット目だけを取りして、new_bitにセット⇒0b0000_0001
         // 左端に追加するのでx0の位置なのでシフトせずこのまま次の計算に使用。
         led_matrix_buffer.bytes[y] 
         = (led_matrix_buffer.bytes[y] << 1) | new_bit;
-        // 5列目の8bitデータex:0b0111_1010⇐1シフトして0b0|1111_010|0にこれと、
+        // 5行目の8bitデータex:0b0111_1010⇐1シフトして0b0|1111_010|0にこれと、
         // newbit0b0000_0001との論理和で、
-        // 0b1111_0101これで5列目の8bit全データを上書きして1ビットずれた様に。
-        // これを7行分繰り返す。
+        // 0b1111_0101これで5行目の8bit全データを上書きして1ビットずれた様に。
+        // これを8行分繰り返す。
     }
 }
 
@@ -1130,10 +1133,10 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
         // return font_table[i].data;今回戻って来るデータは、data[]配列のdataと言う配列名
         // の形になっている。配列名だけの時は内部的に&data[0]という配列の0番目の要素への
         // アドレスとして扱われる。なのでそれに間接参照*を付けた*font_dataはdata配列の
-        // 最初の要素の8bitデータへのアクセスになる。その場合0番目が0x00だった場合NULL
-        // 扱いになり文字が取得されない。その為、font_dataというポインタ自身がNULLだった
-        // （どこも指していなかった）ら、その文字の処理分の1ループをcontinueでスキップする
-        // のが適切。
+        // 最初の要素の8bitデータへのアクセスになる。
+        // ⚠NULL != 0x00。NULLは「0」ではない。ポインタがどこも指していないという意味。
+        // ポインタがNULLの時、関数がNULLを返すので、その際に
+        // 文字がないNULL処理分の1ループをcontinueでスキップする。
         if (font_data == NULL) continue;
         int maxwidth = ((unsigned char)text[i] < 0x80) ? 5 : 8;
         // char を符号付きとして扱うコンパイラでは、0x80以上の値が負の数に。
@@ -1163,6 +1166,8 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
         }
     }    
 }
+
+#if 0   // ◆検討中：プロポーショナル幅計算（未完成のため無効化）
 
 // 別の方法：プロポーショナル　文字ごとに実際の幅を計算する。
 // これをどこに入れるか、if(text[i] < 0x80){
@@ -1196,6 +1201,8 @@ for (size_t i = 0; i < len; i++) {
     // maxwidth列数が3以下なら、空白なら(7-0)/2=3+1=4,
     // !なら((7-1)/2)=3+1=4
 }
+
+#endif　// ◆検討中：プロポーショナル幅計算
 
 /**
  * @brief 電光掲示板モード（メッセージを常時無限ループスクロール表示）
