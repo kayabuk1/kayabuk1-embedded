@@ -36,7 +36,8 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(Sample_matrixLED03
-    Sample_matrixLED03.c)
+    Sample_matrixLED03.c
+    Sample_matrixLED03_doc.c)
 
 pico_set_program_name(Sample_matrixLED03 "Sample_matrixLED03")
 pico_set_program_version(Sample_matrixLED03 "0.1")
@@ -46,7 +47,9 @@ pico_enable_stdio_uart(Sample_matrixLED03 0)
 pico_enable_stdio_usb(Sample_matrixLED03 1)
 
 # Add the standard library to the build
-target_link_libraries(Sample_matrixLED03
+target_link_libraries(
+    Sample_matrixLED03
+    Sample_matrixLED03_doc
         pico_stdlib
         hardware_spi)
 
