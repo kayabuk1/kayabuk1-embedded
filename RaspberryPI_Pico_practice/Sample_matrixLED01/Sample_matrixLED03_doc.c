@@ -371,6 +371,12 @@ static LEDBuffer_t led_2Dmatrix_buffer = { .bytes = {0} };
 // 「どのメンバーを初期化しているのか」が分からない。
 // .bytes = {0} と書くことで、共用体の中の .bytes 配列メンバーを
 // 指定して、全要素を 0（全消灯状態）で初期化の意味になる。
+
+// LEDBuffer_t型のポインタを宣言
+// 別ファイル分割後にはメイン.cファイルではextern LEDBuffer_t led_2Dmatrix_buffer;
+// の記述が必要？
+LEDBuffer *buf_p = &led_2Dmatrix_buffer;
+
 #endif
 
 #if USE_UTF_MODE
