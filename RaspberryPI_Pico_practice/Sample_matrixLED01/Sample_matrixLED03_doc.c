@@ -6,7 +6,7 @@
     済：●実機で確認する（ゴースト、シフト方向、スクロール）
     済：●動画かGIFを撮る
     一旦済：●README を書く
-●動作トレースや原理などのコメントの追記修正
+●動作トレースや原理などのコメントの追記修正　
 
 ★miskaiフォントの英数字が半角で幅が4前後で文字と文字間の空白が大きくなって
 　しまっている問題。
@@ -296,6 +296,9 @@ static を付けた変数は、自動的に0で初期化される。
 #define TEST_MODE_138 0
 #define TEST_MODE_ALL 0
 
+// 2DLED,3DLEDモード切替フラグ
+#define 3DLED_MODE 0
+
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
 // -------------------------------------------------------------
@@ -347,8 +350,29 @@ static LEDBuffer_t led_matrix_buffer = { .bytes = {0} };
 // .bytes = {0} と書くことで、共用体の中の .bytes 配列メンバーを
 // 指定して、全要素を 0（全消灯状態）で初期化の意味になる。
 
-#if USE_UTF_MODE
+if 3DLED_MODE
+// ●8*8*8LEDキューブバッファ
+// static を付けた変数は、自動的に0で初期化される。
+// なので、static LEDBuffer_t led_cube[8]; だけで十分。中身は実質 uint8_t[8][8] になる。
+// 階層	表すもの	コード上の表現
+// 最外（Z軸）	キューブの「高さ（レイヤー）」	led_cube[z] （0〜7の計8面）
+// 中間（Y軸）	1面の中の「行（ライン）」	led_cube[z].bytes[y] （0〜7の計8行）
+// 最内（X軸）	1行の中の「列（ビット）」	(led_cube[z].bytes[y] >> x) & 0x01 （8ビット）
+// /**	
+ *@brief 8x8 LEDフレームバッファ（1面分）の共用体
+ */
+ typedef union {
+    uint8_t  bytes[8];    //< SPI送信・一括処理用の8バイト配列 
+    RowBits  grid[8];     //< (x, y) 座標ビットフィールド配列 
+    uint64_t all_bits;    //< 1面全体(64ビット)を一括クリア・コピーするための変数
+} LEDBuffer_t;
 
+// これを8面分用意する
+static LEDBuffer_t led_3Dcube_buffer[8];
+// ex:led_cube[z].grid[y].x3 = 1;  // 座標 (X:3, Y:y, Z:z) を点灯
+#endif
+
+#if USE_UTF_MODE
 /**
  * @brief スクロール表示用サンプルテキスト
  * @note ■ UTF-8 使う場合は ASCII版をコメントアウトしてこちらを使用
