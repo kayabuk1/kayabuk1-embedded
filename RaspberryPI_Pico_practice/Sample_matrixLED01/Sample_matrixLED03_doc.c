@@ -1234,8 +1234,6 @@ int main(void) {
 }
 #endif
 
-#endif
-
 // ◆一通り点灯パターン実行テストコード
 #if TEST_MODE_ALL
 int main(void) {
