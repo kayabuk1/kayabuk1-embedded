@@ -291,6 +291,11 @@ static を付けた変数は、自動的に0で初期化される。
 #define DEFAULT_BLINK_TIMES        10    /**< デフォルト点滅回数 (10回) */
 #define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (360ms) */
 
+// テストコード切り替え用
+#define TEST_MODE_595 1
+#define TEST_MODE_138 0
+#define TEST_MODE_ALL 0
+
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
 // -------------------------------------------------------------
@@ -407,6 +412,8 @@ static inline void hw_matrix_select_active_row(uint8_t row)
 // unsigned char型と同じサイズだが、8bit(1byte)サイズであることを「明示」する
 // 為にこちらを使う。「row」は点灯させたい行を受け取る変数。
 {
+	if (abs(row) >= 7) retrun;
+	
     gpio_put(DMUX_A, (row >> 0) & 0x01); // 0ビット目
     gpio_put(DMUX_B, (row >> 1) & 0x01); // 1ビット目
     gpio_put(DMUX_C, (row >> 2) & 0x01); // 2ビット目
@@ -1183,6 +1190,54 @@ void run_all_unit_tests(void) {
 // =============================================================
 // メイン関数
 // =============================================================
+// ◆参考
+// マトリクスLED構造※左上が原点（型番印刷側面を下とした時）
+//     左上 x 0     1    2    3    4    5    6    7
+// bytes[y]0 [0].x0,[0].x1
+// bytes[y]1 [1].x0,[1].x1...
+// bytes[y]2
+// bytes[y]3
+// bytes[y]4
+// bytes[y]5
+// bytes[y]6
+// bytes[y]7
+
+// ◆595テストコード（全行点灯させるダイナミック点灯せず、行固定）
+#if TEST_MODE_595
+int main(void) {
+    // 1. ハードウェア初期化
+    init_hardware();
+
+    // 2. 74HC595テスト実行
+	uint8_t row = 0; //0行目（一番上の行）を選択※138A,B,Cすべてに0をセット。
+	uint8_t test_line_data = 0b10101010;
+	hw_matrix_output_line(uint8_t row, uint8_t test_line_data); 
+
+    return 0;
+}
+#endif
+
+// ◆138テストコード（ゆっくりダイナミック全点灯）
+// 使用場合は#define TEST_MODE_138 0⇒1へ書き換え。※他テストモード1⇒0も忘れずに
+#if TEST_MODE_138
+int main(void) {
+    // 1. ハードウェア初期化
+    init_hardware();
+
+    // 2. 138テスト実行
+	led_buffer_fill_all(); //ledバッファ全ピクセルON
+	#undef ROW_SCAN_TIME_US 
+	#define ROW_SCAN_TIME_US 1000*1000*5 //1000us=1ms,1000ms=1s※1行5秒
+	led_render_scan_once(); //1行5秒点灯でダイナック点灯を実施。
+
+	return 0;
+}
+#endif
+
+#endif
+
+// ◆一通り点灯パターン実行テストコード
+#if TEST_MODE_ALL
 int main(void) {
     // 1. ハードウェア初期化
     init_hardware();
@@ -1195,8 +1250,7 @@ int main(void) {
 
     return 0;
 }
-
-
+#endif
 
 /* 一時コメントアウト
 // -------------------------------------------------------------
