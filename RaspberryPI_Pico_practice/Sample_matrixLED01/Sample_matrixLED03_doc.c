@@ -292,12 +292,10 @@ static を付けた変数は、自動的に0で初期化される。
 #define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (360ms) */
 
 // テストコード切り替え用
-#define TEST_MODE_595 1
-#define TEST_MODE_138 0
-#define TEST_MODE_ALL 0
+#define TEST_MODE 99 // 1:74HC595テスト、2:74HC138テスト、99:ALLテスト
 
 // 2DLED,3DLEDモード切替フラグ
-#define 3DLED_MODE 0
+#define LED_3D_MODE 0
 
 // -------------------------------------------------------------
 // データ構造定義（共用体 union）
@@ -320,7 +318,7 @@ typedef struct {
 } RowBits;
 // ex：row[y].x0 = 1; // y行x0（0ビット目）に 1（点灯）をセット
 
-if 3DLED_MODE
+#if LED_3D_MODE
 // ●8*8*8LEDキューブバッファ
 // static を付けた変数は、自動的に0で初期化される。
 // なので、static LEDBuffer_t led_cube[8]; だけで十分。中身は実質 uint8_t[8][8] になる。
@@ -328,7 +326,7 @@ if 3DLED_MODE
 // 最外（Z軸）	キューブの「高さ（レイヤー）」	led_cube[z] （0〜7の計8面）
 // 中間（Y軸）	1面の中の「行（ライン）」	led_cube[z].bytes[y] （0〜7の計8行）
 // 最内（X軸）	1行の中の「列（ビット）」	(led_cube[z].bytes[y] >> x) & 0x01 （8ビット）
-// /**	
+/**	
  *@brief 8x8 LEDフレームバッファ（1面分）の共用体
  */
  typedef union {
@@ -375,7 +373,7 @@ static LEDBuffer_t led_2Dmatrix_buffer = { .bytes = {0} };
 // LEDBuffer_t型のポインタを宣言
 // 別ファイル分割後にはメイン.cファイルではextern LEDBuffer_t led_2Dmatrix_buffer;
 // の記述が必要？
-LEDBuffer *buf_p = &led_2Dmatrix_buffer;
+LEDBuffer_t *p_buf = &led_2Dmatrix_buffer;
 
 #endif
 
@@ -443,7 +441,7 @@ static inline void hw_matrix_select_active_row(uint8_t row)
 // unsigned char型と同じサイズだが、8bit(1byte)サイズであることを「明示」する
 // 為にこちらを使う。「row」は点灯させたい行を受け取る変数。
 {
-	if (abs(row) >= 7) retrun;
+	if (row >= 8) return;
 	
     gpio_put(DMUX_A, (row >> 0) & 0x01); // 0ビット目
     gpio_put(DMUX_B, (row >> 1) & 0x01); // 1ビット目
@@ -769,6 +767,9 @@ void led_buffer_shift_cols(int offset_times) {
 // という真逆の動作をしてしまう。
 // 同様に 33 回シフトしようとすると、33 % 32 = 1 
 // で「1回シフト」と同じ結果になってしまう。
+// 補足：「32で割った余りを使う」というのは、x86（パソコンのCPU）の動き方。
+// ARMでは、シフト量の下位8ビットを見るため、32〜255のシフトでは結果が0になる。
+// どちらにしても、C言語としては未定義動作
 
 
 /**
@@ -1234,7 +1235,7 @@ void run_all_unit_tests(void) {
 // bytes[y]7
 
 // ◆595テストコード（全行点灯させるダイナミック点灯せず、行固定）
-#if TEST_MODE_595
+#if TEST_MODE == 1
 int main(void) {
     // 1. ハードウェア初期化
     init_hardware();
@@ -1242,31 +1243,31 @@ int main(void) {
     // 2. 74HC595テスト実行
 	uint8_t row = 0; //0行目（一番上の行）を選択※138A,B,Cすべてに0をセット。
 	uint8_t test_line_data = 0b10101010;
-	hw_matrix_output_line(uint8_t row, uint8_t test_line_data); 
-
-    return 0;
+	hw_matrix_output_line(row, test_line_data); 
+    while (true) { tight_loop_contents(); }
+     // 内部で何もしない効率的なループ処理（pico/stdlib.hに含まれる）
 }
-#endif
 
 // ◆138テストコード（ゆっくりダイナミック全点灯）
 // 使用場合は#define TEST_MODE_138 0⇒1へ書き換え。※他テストモード1⇒0も忘れずに
-#if TEST_MODE_138
+#elif TEST_MODE == 2
 int main(void) {
     // 1. ハードウェア初期化
     init_hardware();
 
-    // 2. 138テスト実行
+    // 2. 138テスト実行 ※各行1秒ずつ点灯
 	led_buffer_fill_all(); //ledバッファ全ピクセルON
-	#undef ROW_SCAN_TIME_US 
-	#define ROW_SCAN_TIME_US 1000*1000*5 //1000us=1ms,1000ms=1s※1行5秒
-	led_render_scan_once(); //1行5秒点灯でダイナック点灯を実施。
-
-	return 0;
+    uint8_t test_line_data = 0xFF;
+    for (int row=0; row < 8; row++){
+        // int row = 4;
+	    hw_matrix_output_line(row, test_line_data);
+        sleep_ms(1000); 
+    }
+    while (true) { tight_loop_contents(); }
 }
-#endif
 
 // ◆一通り点灯パターン実行テストコード
-#if TEST_MODE_ALL
+#elif TEST_MODE == 99
 int main(void) {
     // 1. ハードウェア初期化
     init_hardware();
@@ -1276,8 +1277,7 @@ int main(void) {
 
     // 3. メインループ：電光掲示板モード（常時点灯スクロール）
     mode_ticker_board(scroll_text);
-
-    return 0;
+    while (true) { tight_loop_contents(); }
 }
 #endif
 
