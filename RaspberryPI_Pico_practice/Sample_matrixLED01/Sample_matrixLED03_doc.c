@@ -292,7 +292,8 @@ static を付けた変数は、自動的に0で初期化される。
 #define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (360ms) */
 
 // テストコード切り替え用
-#define TEST_MODE 99 // 1:74HC595テスト、2:74HC138テスト、99:ALLテスト
+#define TEST_MODE 3 
+// 1:74HC595テスト、2:74HC138テスト、3:割込み処理テスト、99:ALLテスト
 
 // 2DLED,3DLEDモード切替フラグ
 #define LED_3D_MODE 0
@@ -374,7 +375,6 @@ static LEDBuffer_t led_2Dmatrix_buffer = { .bytes = {0} };
 // 別ファイル分割後にはメイン.cファイルではextern LEDBuffer_t led_2Dmatrix_buffer;
 // の記述が必要？
 LEDBuffer_t *p_buf = &led_2Dmatrix_buffer;
-
 #endif
 
 #if USE_UTF_MODE
@@ -1133,6 +1133,68 @@ void mode_ticker_board(const char *text) {
     }
 }
 
+// -------------------------------------------------------------
+// 6．割込み処理の定義
+// -------------------------------------------------------------
+
+// void led_render_scan_once(void) ﾚﾝﾀﾞﾘﾝｸﾞ関数への関数ﾎﾟｲﾝﾀ化試してみるか
+// void (*pfunc)(void) = led_render_scan_once;
+// 共用体 LEDBuffer_t led_2Dmatrix_buffer;を渡す形にしてみるか。
+// led_render_scan_onecは引数voidなので、この関数では使わないが。
+// __unused をつければ良いか。
+
+// 1ms ごとに実行させる。
+// けれど、仕組みを理解しないのも少し引っかかるが後でやるか。
+// static repeating_timer_t timer;  
+// ④ out（タイマー構造体のポインタ）
+// 設定したタイマーの管理情報（IDなど）を「書き込むため」の 
+// repeating_timer_t 型変数のポインタ（&timer）を渡す
+// ⚠タイマーは裏でずっと生き続けないと行けないので、
+// main関数の先頭で宣言するか、グローバルにするか、staticにする。
+
+// ここまでの情報で、一度、138テストコードをISRを使う形に、main関数を
+// 書き換えてみるか。ここに考えを書いてみるか。
+// add_repeating_timer_ms(-1, pfunc, __unused *p_buf, timer);
+// bool repeating_timer_callback(
+//     __unused struct repeating_timer *t)
+// {
+//     led_render_scan_onec();
+//     return true;
+// }
+
+#if 0
+// PicoのC/C++ SDKで用意されている、
+指定したミリ秒間隔で繰り返し割り込み処理を実行するための関数
+static bool add_repeating_timer_ms(
+    int32_t delay_ms, 
+    // ① 繰り返す間隔（ミリ秒） 
+    　マイナス秒：前回実行開始時刻ー次実行開始時刻
+    　プラス病：コールバック処理終了後から指定時間経過後次実行
+    repeating_timer_callback_t callback,  
+    // ② 呼ばれる関数（コールバック）ISR割込みハンドラー関数
+    // C言語では、「関数名」そのものが「その関数アドレス（関数ﾎﾟｲﾝﾀ）」
+    // その為、関数の名前を渡すだけで、関数ﾎﾟｲﾝﾀを渡したことになる。
+    void *user_data,                      
+    // ③ 関数へ渡したい自由なデータ
+    repeating_timer_t *out                
+    // ④ タイマー情報を保存する構造体の住所
+    // ◆ repeating_timer_t は、
+    // Raspberry Pi Pico (RP2040/RP2350) のC/C++ SDK で
+    // 使用される繰り返しタイマー（インターバルタイマー）の構造体。
+    • 定期実行: 一定の時間間隔（ミリ秒またはマイクロ秒）で指定した
+    // コールバック関数（割り込みハンドラー）を繰り返し実行。
+    // • 主な関数:
+	• add_repeating_timer_ms()：ミリ秒単位でタイマーを設定
+	• add_repeating_timer_us()：マイクロ秒単位でタイマーを設定
+	• cancel_repeating_timer()：タイマーを停止・解除
+    // • 構造体の構成要素: delay_us（実行間隔）、
+    // callback（コールバック関数へのポインタ）、
+    // user_data（ユーザーデータ受け渡し用ポインタ）などをを持つ。
+
+    // return true; // trueを返すとタイマー継続、falseで停止
+);
+#endif
+
 // =============================================================
 // 個別単体テストモジュール関数群
 // =============================================================
@@ -1265,6 +1327,66 @@ int main(void) {
     }
     while (true) { tight_loop_contents(); }
 }
+
+// ◆割込み処理テストコード
+#elif TEST_MODE == 3
+static repeating_timer_t scan_timer;
+// 割込みタイマーより長生きでないといけない。
+
+// ◆メモ2026年10月26日
+// add_repeating_timer_ms()に渡される callback関数自体を関数ﾎﾟｲﾝﾀで、
+// 別の関数にしてやるには、、、と考えて詰まってしまっていたが、
+// そもそもadd_repeating_timer_ms()の引数のcallback関数のデータ型
+// (戻り値、引数含む)は決まってしまっているのだから、引数のcallback関数
+// が渡されるところはそのままでないとダメで、callback関数である、
+// repeating_timer_callback()の中で処理を行う関数を、変えるという
+// 処理にするのが妥当なのだろうか？
+// 関数名が、関数アドレスを指すなら、あまり、自分の分岐させたり、状態
+// 遷移させる様な処理を記述するだけなら、わざわざ関数ﾎﾟｲﾝﾀにする意味は
+// 少ないか。Javaでいう多相性、pythonのダックタイピングみたいに、
+// 処理のひな型が決まっていて、引数によって処理を少し変えるみたいな時に
+// 対応させる関数を関数ﾎﾟｲﾝﾀに入れておいて、変えるみたいな処理なら、
+// 関数ﾎﾟｲﾝﾀである有効性があるのだろう。
+bool scan_timer_callback(__unused struct repeating_timer *t)
+{
+    static uint8_t prev_line_data = 0b10101010;
+    uint8_t test_line_data = ~prev_line_data;
+    prev_line_data = test_line_data;
+
+    static uint8_t row = 0; 
+    //どの行を光らせるか。staticにして行の移動を記録する。
+    hw_matrix_output_line(row, test_line_data);
+    row = (row + 1) % 8; // 次の行へ（7の次は0）
+    // 0+1%8=1,1+1%8=2...7+1%8の時0に戻る。
+    return true;
+}
+
+int main(void){
+    init_hardware();
+    add_repeating_timer_us(
+        -250, scan_timer_callback, NULL, &scan_timer);
+    while (true) { tight_loop_contents(); }
+
+}
+
+// ステップ2：バッファの中身を表示する
+// ステップ1が動いたら、③のユーザーデータでバッファのアドレスを渡します。
+// main の中
+// bool scan_timer_callback(repeating_timer_t *t)
+// {
+//     static uint8_t row = 0;
+//     LEDBuffer_t *buf = (LEDBuffer_t *)t->user_data;  // void* を元の型に戻す
+
+//     hw_matrix_output_line(row, buf->bytes[row]);
+//     row = (row + 1) % 8;
+//     return true;
+// }
+
+// // main の中
+// add_repeating_timer_us(-250, scan_timer_callback, p_draw_buf, &scan_timer);
+// void * は「型を問わないアドレス」です。渡すときは何でも入れられますが、
+// 使うときに元の型（LEDBuffer_t *）に戻す必要があります。
+// 関数名や引数は、今のポインタ化の途中のコードに合わせて読み替えてください。
 
 // ◆一通り点灯パターン実行テストコード
 #elif TEST_MODE == 99
