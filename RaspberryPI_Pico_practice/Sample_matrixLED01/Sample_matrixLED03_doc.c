@@ -1540,15 +1540,18 @@ int main(void) {
     scroll_state.len  = wcslen(scroll_text);
 
     // 負の値 = 「前回の開始から次の開始まで」の間隔
-    add_repeating_timer_us(-ROW_SCAN_TIME_US, led_render_scan_timer_callback,
+    add_repeating_timer_us
+    (-ROW_SCAN_TIME_US, led_render_scan_timer_callback,
                            &led_2Dmatrix_buffer, &scan_timer);
-    add_repeating_timer_ms(-DEFAULT_SCROLL_STEP_MS, led_render_scroll_text_w_timer_callback,
+    add_repeating_timer_ms
+    (-DEFAULT_SCROLL_STEP_MS, 
+        led_render_scroll_text_w_timer_callback,
                            &scroll_state, &scroll_timer);
 
     while (true) {
         tight_loop_contents();
         printf("メインループ実行中\n");
-        sleep_ms(1000);   // ← ここが空いた。ライントレーサーの処理などを書ける
+        sleep_ms(100);   // ← ここが空いた。ライントレーサーの処理などを書ける
     }
 }
 
