@@ -274,7 +274,7 @@ static を付けた変数は、自動的に0で初期化される。
 
 #define USE_BIT_SHIFT 0   // 1にするとビット演算版に切り替わる
 
-#define USE_UTF_MODE 0 //0でアスキーコード表示関数、1でUTFコード表示関数有効
+#define USE_UTF_MODE 1 //0でアスキーコード表示関数、1でUTFコード表示関数有効
 
 // -------------------------------------------------------------
 // タイマー・周波数に関する定数定義 (500Hz 設定)
@@ -292,8 +292,9 @@ static を付けた変数は、自動的に0で初期化される。
 #define DEFAULT_SCROLL_STEP_MS     360    /**< デフォルト1ドット送り速度 (360ms) */
 
 // テストコード切り替え用
-#define TEST_MODE 3 
-// 1:74HC595テスト、2:74HC138テスト、3:割込み処理テスト、99:ALLテスト
+#define TEST_MODE 4
+// 1:74HC595テスト、2:74HC138テスト、3:割込み処理テスト、4割込み文字スクロールテスト
+// 99:ALLテスト、100：ALLテスト(日本語対応版)
 
 // 2DLED,3DLEDモード切替フラグ
 #define LED_3D_MODE 0
@@ -383,7 +384,11 @@ LEDBuffer_t *p_buf = &led_2Dmatrix_buffer;
  * @note ■ UTF-8 使う場合は ASCII版をコメントアウトしてこちらを使用
  * @typed wchar_t　※型が異なるので注意
  */
-static const wchar_t scroll_text[] = L" Hello Pico! こんにちは！";
+static const wchar_t scroll_text[] 
+= L"!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]"
+"^_`abcdefghijklmnopqrstuvwxyz{|}~ ぁあぃいぅうぇえぉおかがきぎくぐけげ"
+"こごさざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばぱひびぴふびぴ"
+"へべぺほぼぽまみむめもゃやゅゆょよらりるれろゎわゐゑをん";
 // ※表示させたいメッセージ（日本語・英数字ミックスOK）
 // ●C言語コンパイラに「文字」は「数値（文字コード）」に変換されるのでそのまま文字列を入れる。
 #else
@@ -925,10 +930,14 @@ void led_buffer_rotate_90(void) {
 // -------------------------------------------------------------
 
 void led_render_blink(uint32_t interval_ms, uint8_t times);
-void led_render_scan_once(void); 
+void led_render_scan_once(void);
+bool led_render_scan_timer_callback
+(__unused struct repeating_timer *t);  
 void led_render_frame(uint32_t duration_ms); 
 void led_render_scroll_text(const char *text, uint32_t step_delay_ms);
+void led_render_scroll_text_w(const wchar_t *text, uint32_t step_delay_ms);
 void mode_ticker_board(const char *text);
+void mode_ticker_board_w(const wchar_t *text);
 
 /**
  * @brief 現在のバッファ状態を指定ミリ秒間だけ静止・連続点灯表示する関数
@@ -950,6 +959,77 @@ void led_render_scan_once(void) {
         // 次の行へ移る直前にブランキング（全消灯）
         hw_matrix_led_blanking();
     }
+}
+
+/**
+ * @brief 現在のバッファ状態を250usごとに1行点灯
+ * 内部変数をstaticで状態保持して、呼出し毎に行をずらす
+ * スキャン用タイマー（250µsごと）： バッファの中身を1行ずつ点灯するだけ。中身が何かは気にしない。
+ * @note  250μs ごとに割込みで呼びされ一行の点灯を行う。
+ */
+bool led_render_scan_timer_callback
+(struct repeating_timer *t){
+    printf("250us割込み発生\n");
+    LEDBuffer_t *buf = (LEDBuffer_t *)t->user_data;
+    static uint8_t row = 0; 
+    // 250usごとに呼び出された時にまず（全消灯）
+    hw_matrix_led_blanking();
+
+    //どの行を光らせるか。staticにして行の移動を記録する。
+    // 共用体バッファから最新の y=row 行目の8ビットデータ
+    // （0b...）を直接参照
+    uint8_t line_data = buf->bytes[row];
+    hw_matrix_output_line(row, line_data);
+    row = (row + 1) % 8; // 次の行へ（7の次は0）
+    // 0+1%8=1,1+1%8=2...7+1%8の時0に戻る。
+    return true;
+    // 時間計ってled_render_scan_once()を呼びダイナミック点灯を維持する関数、
+    // led_render_frame()の機能はタイマ割込みが機能を担ってくれるので不要かな？
+    // ●void led_render_scroll_text(const char *text, uint32_t step_delay_ms) 
+    // このテキスト表示呼び出し元の関数を割込み関数を使った場合の仕様に変更するのが良いかな。
+}
+
+// ===== スクロールの状態（元の二重forのループ変数） =====
+typedef struct {
+    const wchar_t *text;   // 表示する文字列
+    size_t len;            // 文字数
+    size_t char_index;     // 何文字目か（元の外側のforの i）
+    int    col;            // その文字の何列目か（元の内側のforの col）
+} ScrollState;
+static ScrollState scroll_state;
+/**
+ * @brief スクロール用タイマー（360msごと）： バッファに1列押し込むだけ。点灯はしない。
+ * @note  250μs ごとに割込みで呼びされ一行の点灯を行う。
+ */
+bool led_render_scroll_text_w_timer_callback(struct repeating_timer *t)
+{   
+    printf("360ms割込み発生=======================================================\n");
+    ScrollState *s = (ScrollState *)t->user_data;
+    wchar_t code = s->text[s->char_index];
+    const uint8_t *font_data = get_font_data_w(code);
+
+    // 今の文字の幅（進める前に決める）
+    int maxwidth;
+    if (code < 0x80) {
+        maxwidth = (code < 0x80) ? 4 : 8;
+    } else {
+        maxwidth = 8;
+    }
+    // 1列分を取り出して押し込む（rowのforは一瞬で終わるので残す）
+    uint8_t col_pattern = 0;
+    for (int row = 0; row < 8; row++) {
+        uint8_t bit = (font_data[row] >> (7 - s->col)) & 0x01;
+        col_pattern |= (bit << row);
+    }
+    led_buffer_push_col_from_right(col_pattern);
+
+    // 状態を1つ進める（元の for の「col++、終わったら i++」）
+    s->col++;
+    if (s->col >= maxwidth) {
+        s->col = 0;
+        s->char_index = (s->char_index + 1) % s->len;  // 最後まで来たら先頭へ
+    }
+    return true;
 }
 
 /**
@@ -1057,7 +1137,7 @@ void led_render_scroll_text(const char *text, uint32_t step_delay_ms) {
         // ポインタがNULLの時、関数がNULLを返すので、その際に
         // 文字がないNULL処理分の1ループをcontinueでスキップする。
         if (font_data == NULL) continue;
-        int maxwidth = ((unsigned char)text[i] < 0x80) ? 5 : 8;
+        int maxwidth = ((unsigned char)text[i] < 0x80) ? 4 : 8;
         // char を符号付きとして扱うコンパイラでは、0x80以上の値が負の数に。
         // そうなると < 0x80 が常に真になってしまうので、unsigned char型にキャストして、
         // 判定に利用する。※上は三項演算子の記述の仕方。
@@ -1120,8 +1200,57 @@ for (size_t i = 0; i < len; i++) {
     // maxwidth列数が3以下なら、空白なら(7-0)/2=3+1=4,
     // !なら((7-1)/2)=3+1=4
 }
-
 #endif //◆検討中：プロポーショナル幅計算
+
+/**
+ * @brief 指定した文字列を1ドットずつスムーズに左スクロール表示する関数
+ * @param[in] text スクロール表示させる文字列(wchar_t)
+ * @param[in] step_delay_ms 1ピクセル移動ごとの静止保持時間 (ミリ秒)
+ */
+void led_render_scroll_text_w(const wchar_t *text, uint32_t step_delay_ms){
+    if (text == NULL) return;
+    size_t len = wcslen(text);
+
+    for (size_t i = 0; i < len; i++) {
+        // フォントデータ(8バイト)の取得
+        const uint8_t *font_data = get_font_data_w(text[i]);
+        // data[i] は i番目の要素の値。アドレスは &data[i]（または data + i）になる。
+        // return font_table[i].data;今回戻って来るデータは、data[]配列のdataと言う配列名
+        // の形になっている。配列名だけの時は内部的に&data[0]という配列の0番目の要素への
+        // アドレスとして扱われる。なのでそれに間接参照*を付けた*font_dataはdata配列の
+        // 最初の要素の8bitデータへのアクセスになる。
+        // ⚠NULL != 0x00。NULLは「0」ではない。ポインタがどこも指していないという意味。
+        // ポインタがNULLの時、関数がNULLを返すので、その際に
+        // 文字がないNULL処理分の1ループをcontinueでスキップする。
+        if (font_data == NULL) continue;
+        int maxwidth = (text[i] < 0x80) ? 4 : 8;
+        // char を符号付きとして扱うコンパイラでは、0x80以上の値が負の数に。
+        // そうなると < 0x80 が常に真になってしまうので、unsigned char型にキャストして、
+        // 判定に利用する。※上は三項演算子の記述の仕方。
+        // 0x80(128)未満は半角になるので、縦5列までにする
+        // ※「実機で見て隙間2列が読みやすかったため」
+        // 'A'の時 u0041
+        // 1文字(5列)分、縦1列ずつ取り出してバッファに挿入＆レンダリング
+        for (int col = 0; col < maxwidth; col++) {
+            uint8_t col_pattern = 0;
+            // ↓文字フォントから1列分(縦方向8ビット)をループで各行から取り出す。
+            for (int row = 0; row < 8; row++) {
+                // (7 - col) でフォントの左端(bit7)から抽出
+                uint8_t bit = (font_data[row] >> (7 - col)) & 0x01;
+                // bit7~bit3までが必要なので、(7 - col)のままで良い。
+                // col=1,row=0,font_data[0]==0b 0100 0000の時
+                // 7-1=6右シフト0b0000_0001 & 0x01で6ビット目を取り出せた。
+                col_pattern |= (bit << row);
+                // これを、row=0行目なので0シフト(そのまま)し、初期値0x00と論理和
+                // colpattern==0x01が格納。これを縦1列データ分繰り返す。
+            }
+            // バッファを1ピクセル左シフトし、新しい1列を追加
+            led_buffer_push_col_from_right(col_pattern);
+            // 指定時間ぶんダイナミック点灯描画
+            led_render_frame(step_delay_ms);
+        }
+    }    
+}
 
 /**
  * @brief 電光掲示板モード（メッセージを常時無限ループスクロール表示）
@@ -1130,6 +1259,16 @@ for (size_t i = 0; i < len; i++) {
 void mode_ticker_board(const char *text) {
     while (true) {
         led_render_scroll_text(text, DEFAULT_SCROLL_STEP_MS);
+    }
+}
+
+/**
+ * @brief 電光掲示板モード（メッセージを常時無限ループスクロール表示）
+ * @param[in] text 表示メッセージ文字列
+ */
+void mode_ticker_board_w(const wchar_t *text) {
+    while (true) {
+        led_render_scroll_text_w(text, DEFAULT_SCROLL_STEP_MS);
     }
 }
 
@@ -1388,6 +1527,31 @@ int main(void){
 // 使うときに元の型（LEDBuffer_t *）に戻す必要があります。
 // 関数名や引数は、今のポインタ化の途中のコードに合わせて読み替えてください。
 
+#elif TEST_MODE == 4
+
+// ===== タイマー構造体（割込みより長生きさせるため static） =====
+static repeating_timer_t scan_timer;
+static repeating_timer_t scroll_timer;
+
+int main(void) {
+    init_hardware();
+
+    scroll_state.text = scroll_text;
+    scroll_state.len  = wcslen(scroll_text);
+
+    // 負の値 = 「前回の開始から次の開始まで」の間隔
+    add_repeating_timer_us(-ROW_SCAN_TIME_US, led_render_scan_timer_callback,
+                           &led_2Dmatrix_buffer, &scan_timer);
+    add_repeating_timer_ms(-DEFAULT_SCROLL_STEP_MS, led_render_scroll_text_w_timer_callback,
+                           &scroll_state, &scroll_timer);
+
+    while (true) {
+        tight_loop_contents();
+        printf("メインループ実行中\n");
+        sleep_ms(1000);   // ← ここが空いた。ライントレーサーの処理などを書ける
+    }
+}
+
 // ◆一通り点灯パターン実行テストコード
 #elif TEST_MODE == 99
 int main(void) {
@@ -1399,6 +1563,20 @@ int main(void) {
 
     // 3. メインループ：電光掲示板モード（常時点灯スクロール）
     mode_ticker_board(scroll_text);
+    while (true) { tight_loop_contents(); }
+}
+
+// ◆（日本語対応版）一通り点灯パターン実行テストコード
+#elif TEST_MODE == 100
+int main(void) {
+    // 1. ハードウェア初期化
+    init_hardware();
+
+    // 2. 単体テスト実行
+    run_all_unit_tests();
+
+    // 3. メインループ：電光掲示板モード（常時点灯スクロール）
+    mode_ticker_board_w(scroll_text);
     while (true) { tight_loop_contents(); }
 }
 #endif
@@ -1466,8 +1644,8 @@ int main()
             // ■UTF-8版を使う場合は↑コードコメントアウトして↓コードを逆にコメント外す。
             // 文字コードからフォントデータ（8バイト）を取得
             // const uint8_t *next_font 
-            // = get_font_data(scroll_text[char_idx]);
-            // ●get_font_data(...): 
+            // = get_font_data_w(scroll_text[char_idx]);
+            // ●get_font_data_w(...): 
             // 取り出した1文字（例: L'H'）を渡し、misaki_font.h の検索テーブルから、
             // その文字の8バイトLEDフォントデータへの先頭アドレス
             // （const uint8_t* ポインタ）を受け取る。
