@@ -409,6 +409,7 @@ static inline uint8_t reverse_bits(uint8_t b);
 static inline void hw_matrix_led_blanking(void);
 static inline void hw_matrix_select_active_row(uint8_t row);       
 static inline void hw_matrix_output_line(uint8_t row, uint8_t line_data); 
+void init_hardware(void);
 
 /**
  * @brief 8ビットデータのLSB/MSBビット順逆転関数
@@ -932,7 +933,7 @@ void led_buffer_rotate_90(void) {
 void led_render_blink(uint32_t interval_ms, uint8_t times);
 void led_render_scan_once(void);
 bool led_render_scan_timer_callback
-(__unused struct repeating_timer *t);  
+(struct repeating_timer *t);  
 void led_render_frame(uint32_t duration_ms); 
 void led_render_scroll_text(const char *text, uint32_t step_delay_ms);
 void led_render_scroll_text_w(const wchar_t *text, uint32_t step_delay_ms);
