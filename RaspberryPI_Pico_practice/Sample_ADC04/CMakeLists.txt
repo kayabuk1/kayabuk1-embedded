@@ -35,7 +35,9 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(Sample_ADC04 Sample_ADC04.c )
+add_executable(Sample_ADC04 Sample_ADC04.c 
+    adc_mcp3002/adc_mcp3002.c
+)
 
 pico_set_program_name(Sample_ADC04 "Sample_ADC04")
 pico_set_program_version(Sample_ADC04 "0.1")
@@ -48,7 +50,9 @@ pico_enable_stdio_usb(Sample_ADC04 1)
 target_link_libraries(Sample_ADC04
         pico_stdlib
         hardware_spi
-        hardware_sync)
+        hardware_sync
+        # ADC_MCP3002/adc_mcp3002
+        )
 
 # Add the standard include files to the build
 target_include_directories(Sample_ADC04 PRIVATE

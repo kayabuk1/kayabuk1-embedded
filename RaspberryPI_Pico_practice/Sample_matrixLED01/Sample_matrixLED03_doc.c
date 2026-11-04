@@ -968,8 +968,21 @@ void led_render_scan_once(void) {
  * スキャン用タイマー（250µsごと）： バッファの中身を1行ずつ点灯するだけ。中身が何かは気にしない。
  * @note  250μs ごとに割込みで呼びされ一行の点灯を行う。
  */
-bool led_render_scan_timer_callback
-(struct repeating_timer *t){
+bool led_render_scan_timer_callback(struct repeating_timer *t)
+{   
+//Pico SDKの中では、repeating_timerはおおよそ次のように
+// 定義されている。
+// typedef struct repeating_timer {
+//     int64_t delay_us;                  // 呼び出す間隔
+//     alarm_pool_t *pool;         // どのアラームプールで動くか
+//     alarm_id_t alarm_id;                // アラームの番号
+//     repeating_timer_callback_t callback;   // 呼び出す関数
+//     void *user_data;                   // 自由に使えるメモ欄
+// } repeating_timer_t;
+// 例えるなら、repeating_timerはタイマーの「設定票」で、
+// そこには間隔や呼び出す関数のほかに「何でも書いていいメモ欄」が
+// ついている。それがuser_data。
+
     printf("250us割込み発生\n");
     LEDBuffer_t *buf = (LEDBuffer_t *)t->user_data;
     static uint8_t row = 0; 
@@ -996,8 +1009,9 @@ typedef struct {
     size_t len;            // 文字数
     size_t char_index;     // 何文字目か（元の外側のforの i）
     int    col;            // その文字の何列目か（元の内側のforの col）
-} ScrollState;
-static ScrollState scroll_state;
+} ScrollState_t;
+
+static ScrollState_t scroll_state;
 /**
  * @brief スクロール用タイマー（360msごと）： バッファに1列押し込むだけ。点灯はしない。
  * @note  250μs ごとに割込みで呼びされ一行の点灯を行う。
@@ -1005,7 +1019,7 @@ static ScrollState scroll_state;
 bool led_render_scroll_text_w_timer_callback(struct repeating_timer *t)
 {   
     printf("360ms割込み発生=======================================================\n");
-    ScrollState *s = (ScrollState *)t->user_data;
+    ScrollState_t *s = (ScrollState_t *)t->user_data;
     wchar_t code = s->text[s->char_index];
     const uint8_t *font_data = get_font_data_w(code);
 
