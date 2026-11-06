@@ -51,7 +51,6 @@ target_link_libraries(Sample_ADC04
         pico_stdlib
         hardware_spi
         hardware_sync
-        # ADC_MCP3002/adc_mcp3002
         )
 
 # Add the standard include files to the build

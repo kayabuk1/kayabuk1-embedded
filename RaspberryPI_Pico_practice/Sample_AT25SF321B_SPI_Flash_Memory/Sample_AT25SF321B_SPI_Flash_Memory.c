@@ -2,6 +2,10 @@
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 
+#define Normal_Read 0x03
+#define Fast_Read 0x0B
+
+
 
 int main()
 {
