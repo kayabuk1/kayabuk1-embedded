@@ -6,9 +6,9 @@ kayabuk1-embedded
 
 フォルダ案内<br>
 フォルダ	内容	使用マイコン<br>
-RaspberryPI_Pico_practice/Sample_ADC05_MCP3208<br>	8ch・12bit ADコンバータ MCP3208 のドライバ	Raspberry Pi Pico<br>
-RaspberryPI_Pico_practice/Sample_ADC04_MCP3002<br>	2ch・10bit ADコンバータ MCP3002 のドライバ	Raspberry Pi Pico<br>
-RaspberryPI_Pico_practice/Sample_matrixLED03<br>	8x8 マトリクスLED の表示	Raspberry Pi Pico<br>
+RaspberryPI_Pico_practice/Sample_ADC05_MCP3208<br>	&emsp;&emsp;8ch・12bit ADコンバータ MCP3208 のドライバ	Raspberry Pi Pico<br>
+RaspberryPI_Pico_practice/Sample_ADC04_MCP3002<br>	&emsp;&emsp;2ch・10bit ADコンバータ MCP3002 のドライバ	Raspberry Pi Pico<br>
+RaspberryPI_Pico_practice/Sample_matrixLED03<br>	&emsp;&emsp;8x8 マトリクスLED の表示	Raspberry Pi Pico<br>
 20260311_maiconLineTracer_Stable1.0	ライントレーサー（Stable 1.0）	ATmega328P（Arduino UNO互換）<br>
 archive ほか	学習初期の練習コード（LED点滅、ブザー、PWMなど）	ATmega328P
 
