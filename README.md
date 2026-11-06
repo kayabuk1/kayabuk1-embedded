@@ -6,11 +6,12 @@ kayabuk1-embedded
 
 フォルダ案内
 フォルダ	内容	使用マイコン
-RaspberryPI_Pico_practice/Sample_ADC05_MCP3208	8ch・12bit ADコンバータ MCP3208 のドライバ	Raspberry Pi Pico
-RaspberryPI_Pico_practice/Sample_ADC04_MCP3002	2ch・10bit ADコンバータ MCP3002 のドライバ	Raspberry Pi Pico
-RaspberryPI_Pico_practice/Sample_matrixLED03	8x8 マトリクスLED の表示	Raspberry Pi Pico
+RaspberryPI_Pico_practice/Sample_ADC05_MCP3208	8ch・12bit ADコンバータ MCP3208 のドライバ	Raspberry Pi Pico<br>
+RaspberryPI_Pico_practice/Sample_ADC04_MCP3002	2ch・10bit ADコンバータ MCP3002 のドライバ	Raspberry Pi Pico<br>
+RaspberryPI_Pico_practice/Sample_matrixLED03	8x8 マトリクスLED の表示	Raspberry Pi Pico<br>
 20260311_maiconLineTracer_Stable1.0	ライントレーサー（Stable 1.0）	ATmega328P（Arduino UNO互換）
 archive ほか	学習初期の練習コード（LED点滅、ブザー、PWMなど）	ATmega328P
+
 1. ADコンバータのドライバ（Raspberry Pi Pico）
 概要
 MCP3002（2ch・10bit）と MCP3208（8ch・12bit）を、SPI で読み取るドライバです。
@@ -24,12 +25,14 @@ repeating_timer で一定間隔ごとに全チャンネルを読み取り、チ�
 今後の予定
 MCP3008（8ch・10bit）との切り替えに対応する
 複数回の測定値を平均して、下位ビットの揺れを抑える
-2. 8x8 マトリクスLED（Raspberry Pi Pico）
+
+3. 8x8 マトリクスLED（Raspberry Pi Pico）
 Raspberry Pi Pico と 74HC595・74HC138 を使った、8x8 マトリクスLED の表示プログラムです。
 1行ずつ高速に切り替えて点灯する方式（ダイナミック点灯）で表示しています。
 英数字に加えて、日本語（wchar_t）の表示にも対応しました。
 2人で制作し、回路は相方、コードは主に横須賀が担当しました。
-3. 自律走行ライントレーサー（ATmega328P / Arduino）
+
+5. 自律走行ライントレーサー（ATmega328P / Arduino）
 ハードウェア構成
 マイコン： ATmega328P（Arduino UNO互換）
 モータードライバ： DRV8835
@@ -42,6 +45,5 @@ P制御（比例制御）： 左右のセンサー値の差に比例して、左
 開発中に起きた問題と対応
 
 開発中の不具合は、シリアル出力のログを見ながら原因の仮説を立て、一つずつ確かめました。
-
 グレーラインの上で前後に往復してしまう（エラー8・9）： センサーの可変抵抗を調整して、白とグレーの読み取り値の差を広げ、そのうえでプログラム側の閾値を見直しました。
 クランクでコースアウトする（エラー19・23）： 線を見つけた直後、車体が斜めのまま進んでしまうことが原因でした。線と平行になるまで向きを合わせる状態を FSM に追加し、向きを整えてから前進するようにしました。
