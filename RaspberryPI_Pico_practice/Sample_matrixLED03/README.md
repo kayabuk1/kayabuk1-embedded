@@ -1,6 +1,6 @@
 # 8×8 LEDマトリクス表示ドライバ（Raspberry Pi Pico / C言語）
 
-![動作の様子](20261016_matrixLED点灯試験様子.png)
+![動作の様子](20261016_matrixLED点灯試験様子GIF画像-compress.gif)
 動画：(https://photos.app.goo.gl/Aj9LryQogsvCSmmR6)
 ![動画QRコード](QR_20261016_matrixLED点灯試験様子動画.png)
 
