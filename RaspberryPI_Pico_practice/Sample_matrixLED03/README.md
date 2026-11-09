@@ -1,15 +1,14 @@
 # 8×8 LEDマトリクス表示ドライバ（Raspberry Pi Pico / C言語）
 
 ![動作の様子](20261016_matrixLED点灯試験様子GIF画像-compress.gif)
-動画：(https://photos.app.goo.gl/Aj9LryQogsvCSmmR6)
-![動画QRコード](QR_20261016_matrixLED点灯試験様子動画.png)
+[動画を見る](https://photos.app.goo.gl/Aj9LryQogsvCSmmR6)
 
 ## 概要
 Raspberry Pi Pico（RP2040）で 8×8 LEDマトリクスをダイナミック点灯させ、
 文字のスクロール表示やドット絵表示を行うドライバです。
 職業訓練校（船橋テクノスクール IoTシステム科）の授業で制作しました。
 同級生各人で分担して様々な電子回路とドライバを作成しています。
-私は2人チームでマトリクスLEDを担当し、電子回路は同級生、コードは主に私が担当しました。
+2人チームでマトリクスLEDを担当し、電子回路は同級生、コードは主に私が担当しました。
 現在も機能追加を続けています（今後の予定：タイマー割り込みによる表示の自動化、ファイル分割など）。
 
 メインのコード：[Sample_matrixLED03.c](Sample_matrixLED03.c)
