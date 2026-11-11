@@ -6,13 +6,13 @@
 
 // ========= AT25SF321B(ﾌﾗｯｼｭﾒﾓﾘ)配線表（ピン割り当て表）=====================
 // -－ピン割り当て表
-// *　１｜!CS(ﾁｯﾌﾟｾﾚｸﾄ) ⇒ GPIO3 ※本番GPI13
+// *　１｜!CS(ﾁｯﾌﾟｾﾚｸﾄ) ⇒ GPIO3 ※本番GPIO13
 // *　２｜SO(IO1)(SerialOutput)(MISO) ⇒ GPIO4 ※本番GPIO12
 // *　３｜!WP(IO2)(WriteProtect)書込み保護、内部ﾌﾟﾙｱｯﾌﾟ在り⇒フローティングに
 // *　４｜GND
 // ‐‐‐―――折り返し
 // *　５｜SI(IO0)(SreialInput)(MOSI) ⇒ GPIO7 ※本番GPIO11
-// *　６｜SCLK ⇒ GPIO6 ※本番GPIO12
+// *　６｜SCLK ⇒ GPIO6 ※本番GPIO10
 // *　７｜!HOLD(IO3)通信一時停止、内部ﾌﾟﾙｱｯﾌﾟ在り⇒フローティングに
 // *　８｜VCC
 
@@ -215,20 +215,34 @@ bool read_status_is_busy(void)
     uint8_t opecode = READ_STATUS_REGISTER_1;
     cs_low();
     spi_write_read_blocking(
-        AT25SF_SPI_PORT, &opecode, &status, 1);
+        AT25SF_SPI_PORT, &opecode, &status, 2);
+    // opecodeの8バイト後のダミービット8バイト送信して、
+    // 8バイトのレジスタ1のデータが返ってくるので、送るデータ数は2。
+    // SPIはリングバッファなので、受信するには同じサイズのデータを送っている。
     cs_high();
     return status & 0x01;
     // Ready/BusyBITが 1の時Busy,0の時Ready。
 }
-
+// ◆割り込み処理考えメモ
+// add_repeating_timer_us()をそのまま使うのでは使いずらい、
+// ➡start_polling()みたいな関数でラップしたい。
+// start_polling⇒add_repeating_timer_ms⇒polling_timer_callback
+// ⇒この中でread_status_is_busy()を実行させる。
+// ⚠Readyになったことを誰にも知らせていないのでmainから不明問題。
+// ➡read_status_is_busy()自体がboolを返すのでif()の条件として使う。
+// ➡状態保持用のデータ、構造体などを用意してそこのフラグを書き換える。
+// 今はis_busy-write関数など、とダイレクトにつながっているので、
+// is_busy-状態記録バッファ-write関数などにして疎結合にする？
 static repeating_timer_t polling_timer;
 // ↑add_repeating_timer_us() に渡すタイマー管理用の構造体は、
 // タイマーが動いている間ずっとメモリ上に生き残っている必要がある。
-bool start_polling(uint64_t interval_us, bool(*func)(void));
-bool start_polling(uint64_t interval_us, bool(*func)(void))
+bool start_polling(uint64_t interval_us,
+bool(*polling_timer_callback)(repeating_timer_t *));
+bool start_polling(uint64_t interval_us,
+bool(*polling_timer_callback)(repeating_timer_t *))
 {
     return add_repeating_timer_us(
-        interval_us, func, NULL, &polling_timer
+        interval_us, polling_timer_callback, NULL, &polling_timer
     );
     // ⚠注意：add_repeating_timer_us に渡す関数は、
     // 「repeating_timer_t * を1つ受け取り、boolを返す」形と決まっている。
@@ -371,9 +385,9 @@ void AT25SF_write_log() //log_dataを送るのは明らかなので引数なし
         tx_buf[11] = log_data_buf.right_speed & 0xFF;
         tx_buf[12] = log_data_buf.left_motor_duty;
         tx_buf[13] = log_data_buf.right_motor_duty;
-        tx_buf[14] = (uint16_t)(log_data_buf.target_angular_velocity >> 8) & 0xFF;
+        tx_buf[14] = ((uint16_t)log_data_buf.target_angular_velocity >> 8) & 0xFF;
         tx_buf[15] = log_data_buf.target_angular_velocity & 0xFF;
-        tx_buf[16] = (uint16_t)(log_data_buf.now_angular_velocity >> 8) & 0xFF;
+        tx_buf[16] = ((uint16_t)log_data_buf.now_angular_velocity >> 8) & 0xFF;
         tx_buf[17] = log_data_buf.now_angular_velocity & 0xFF;
         tx_buf[18] = (log_data_buf.vcc_mv >> 8) & 0xFF;
         tx_buf[19] = log_data_buf.vcc_mv & 0xFF;
@@ -389,7 +403,7 @@ void AT25SF_write_log() //log_dataを送るのは明らかなので引数なし
         // 毎回下から2桁目が +1 される（0x00 ➔ 0x10 ➔ 0x20 ➔ ...0xF0）。
         // 16回目で桁上がりして、0x100になって下位2ビットが0x00に戻る。
         // これでピッタリ256バイト(1ページ)になる。
-        if((memory_address && 0X0F) != 0x00)
+        if((memory_address & 0X0F) != 0x00)
         // 0xFF = 0b1111_1111 = 255
         // 10進数の16は 2進数では 0b00010000。
         // 16ずつ増やすと、下位4ビットはずっと 0000 のまま固定。
@@ -419,8 +433,6 @@ int main()
 {
     stdio_init_all();
     AT25SF_init();
-
-    start_polling(PAGE_WRITE_TAKES_TIME, read_status_is_busy);
 
     while (true) {
         uint8_t id[3] = {0};
