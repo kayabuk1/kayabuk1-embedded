@@ -17,6 +17,7 @@
 #include "hardware/spi.h"
 #include "hardware/sync.h"
 #include "buzzer/buzzer.h"
+#include "pico_led_sw.h"
 
 // ========= AT25SF321B(ﾌﾗｯｼｭﾒﾓﾘ)配線表（ピン割り当て表）=====================
 // -－ピン割り当て表
