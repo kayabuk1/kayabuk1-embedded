@@ -177,13 +177,13 @@ typedef struct log_data
     int16_t target_angular_velocity;
     int16_t now_angular_velocity;
     uint16_t vcc_mv;
-}log_data_t; //計16byte
+}sensors_data_t; //計16byte
 
 
 
 #if AT25SF_DEBUG==1
 // ダミーデータを設定。
-volatile log_data_t log_data_buf 
+volatile sensors_data_t now_sensors_data 
 = {
     .sensor_displacement = 0x0F,
     .sensor_binary = 0xF0,
@@ -197,7 +197,7 @@ volatile log_data_t log_data_buf
     .vcc_mv = 0X0FF0
 };
 #else
-volatile log_data_t log_data_buf = {0};
+volatile sensors_data_t now_sensors_data = {0};
 #endif
 
 #if 0 //RP2350は内蔵SRAM 520KB のため、こんな変数は使えない。
@@ -420,7 +420,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 // オーバヘッドが大きく、マイクロマウス制御に影響を及ぼすため、
 // 間にダブルバッファを挟み256byte一気に送信する方針に変更。
 // そのためコメントアウト。後ほど削除するか検討。
-// // log_dataを送る前に、データを取得して log_data_bufに保存する処理が必要か。
+// // log_dataを送る前に、データを取得して now_sensors_dataに保存する処理が必要か。
 // void AT25SF_write_log(void);
 // void AT25SF_write_log(void) //log_dataを送るのは明らかなので引数なし
 // {
@@ -428,29 +428,29 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //     if(read_status_is_busy()){
 //         return;
 //     }else{
-//         size_t max = sizeof(log_data_t)/sizeof(uint8_t);
+//         size_t max = sizeof(sensors_data_t)/sizeof(uint8_t);
 //         uint8_t tx_buf[max + 4];
 //         tx_buf[0] = opecode;
 //         tx_buf[1] = (memory_address >> 16) & 0xFF;
 //         tx_buf[2] = (memory_address >> 8) & 0xFF;
 //         tx_buf[3] = memory_address;
 //         uint32_t ints = save_and_disable_interrupts();
-//         tx_buf[4] = log_data_buf.sensor_displacement;
-//         tx_buf[5] = log_data_buf.sensor_binary;
-//         tx_buf[6] = (log_data_buf.target_speed >> 8) & 0xFF;
-//         tx_buf[7] = log_data_buf.target_speed & 0xFF;
-//         tx_buf[8] = (log_data_buf.left_speed >> 8) & 0xFF;
-//         tx_buf[9] = log_data_buf.left_speed & 0xFF;
-//         tx_buf[10] = (log_data_buf.right_speed >> 8) & 0xFF;
-//         tx_buf[11] = log_data_buf.right_speed & 0xFF;
-//         tx_buf[12] = log_data_buf.left_motor_duty;
-//         tx_buf[13] = log_data_buf.right_motor_duty;
-//         tx_buf[14] = ((uint16_t)log_data_buf.target_angular_velocity >> 8) & 0xFF;
-//         tx_buf[15] = log_data_buf.target_angular_velocity & 0xFF;
-//         tx_buf[16] = ((uint16_t)log_data_buf.now_angular_velocity >> 8) & 0xFF;
-//         tx_buf[17] = log_data_buf.now_angular_velocity & 0xFF;
-//         tx_buf[18] = (log_data_buf.vcc_mv >> 8) & 0xFF;
-//         tx_buf[19] = log_data_buf.vcc_mv & 0xFF;
+//         tx_buf[4] = now_sensors_data.sensor_displacement;
+//         tx_buf[5] = now_sensors_data.sensor_binary;
+//         tx_buf[6] = (now_sensors_data.target_speed >> 8) & 0xFF;
+//         tx_buf[7] = now_sensors_data.target_speed & 0xFF;
+//         tx_buf[8] = (now_sensors_data.left_speed >> 8) & 0xFF;
+//         tx_buf[9] = now_sensors_data.left_speed & 0xFF;
+//         tx_buf[10] = (now_sensors_data.right_speed >> 8) & 0xFF;
+//         tx_buf[11] = now_sensors_data.right_speed & 0xFF;
+//         tx_buf[12] = now_sensors_data.left_motor_duty;
+//         tx_buf[13] = now_sensors_data.right_motor_duty;
+//         tx_buf[14] = ((uint16_t)now_sensors_data.target_angular_velocity >> 8) & 0xFF;
+//         tx_buf[15] = now_sensors_data.target_angular_velocity & 0xFF;
+//         tx_buf[16] = ((uint16_t)now_sensors_data.now_angular_velocity >> 8) & 0xFF;
+//         tx_buf[17] = now_sensors_data.now_angular_velocity & 0xFF;
+//         tx_buf[18] = (now_sensors_data.vcc_mv >> 8) & 0xFF;
+//         tx_buf[19] = now_sensors_data.vcc_mv & 0xFF;
 //         restore_interrupts(ints);
 //         AT25SF_WEL_high();
 //         AT25SF_cs_low();
@@ -459,7 +459,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //         // 1MHzで20バイト送ると約160µsかかる（8μs*20）。
 //         // 1msの制御周期のうち、16%をSPIの待ちで使ってしまう。
 //         // ➡フラッシュへの記録SPI通信で割込みを行うのは難しい。
-//         memory_address += sizeof(log_data_t); 
+//         memory_address += sizeof(sensors_data_t); 
 //         // 10進数の「16」は16進数で 0x10 なので、
 //         // 毎回下から2桁目が +1 される（0x00 ➔ 0x10 ➔ 0x20 ➔ ...0xF0）。
 //         // 16回目で桁上がりして、0x100になって下位2ビットが0x00に戻る。
@@ -491,22 +491,22 @@ void pack_log_into_buf(void)
     // if (n_bytes >= 256){
     //     n_pages = n_pages ^ 1;
     // } ifを使った方が分かりやすいかもしれない、、、。
-    log_page_buf[n_pages].bytes[n_bytes] = log_data_buf.sensor_displacement;
-    log_page_buf[n_pages].bytes[n_bytes+1] = log_data_buf.sensor_binary;
-    log_page_buf[n_pages].bytes[n_bytes+2] = (log_data_buf.target_speed >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+3] = log_data_buf.target_speed & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+4] = (log_data_buf.left_speed >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+5] = log_data_buf.left_speed & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+6] = (log_data_buf.right_speed >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+7] = log_data_buf.right_speed & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+8] = log_data_buf.left_motor_duty;
-    log_page_buf[n_pages].bytes[n_bytes+9] = log_data_buf.right_motor_duty;
-    log_page_buf[n_pages].bytes[n_bytes+10] = ((uint16_t)log_data_buf.target_angular_velocity >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+11] = log_data_buf.target_angular_velocity & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+12] = ((uint16_t)log_data_buf.now_angular_velocity >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+13] = log_data_buf.now_angular_velocity & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+14] = (log_data_buf.vcc_mv >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+15] = log_data_buf.vcc_mv & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes] = now_sensors_data.sensor_displacement;
+    log_page_buf[n_pages].bytes[n_bytes+1] = now_sensors_data.sensor_binary;
+    log_page_buf[n_pages].bytes[n_bytes+2] = (now_sensors_data.target_speed >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+3] = now_sensors_data.target_speed & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+4] = (now_sensors_data.left_speed >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+5] = now_sensors_data.left_speed & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+6] = (now_sensors_data.right_speed >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+7] = now_sensors_data.right_speed & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+8] = now_sensors_data.left_motor_duty;
+    log_page_buf[n_pages].bytes[n_bytes+9] = now_sensors_data.right_motor_duty;
+    log_page_buf[n_pages].bytes[n_bytes+10] = ((uint16_t)now_sensors_data.target_angular_velocity >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+11] = now_sensors_data.target_angular_velocity & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+12] = ((uint16_t)now_sensors_data.now_angular_velocity >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+13] = now_sensors_data.now_angular_velocity & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+14] = (now_sensors_data.vcc_mv >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+15] = now_sensors_data.vcc_mv & 0xFF;
     // ◆いや、forで回すのでなくて、割り込みで呼ばれることを想定して、
     // 配列の指定を、%16,%256などを使って、staticかグローバルにして管理して、
     // 値の格納処理後に、カウントを進める書き方に変える必要があるかな。
