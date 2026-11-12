@@ -211,7 +211,7 @@ typedef union{
 }AT25SF321B_AllMemory_32Mbit_t;
 #endif
 // ===グローバル変数========================
-static bool ready = 0;
+
 // ==========================================
 // ------ハードウェアドライバ部分
 
@@ -477,11 +477,14 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //     }
 // }
 
-static uint32_t total_bytes = 0;
+static uint now_fill //割り込みが今詰めているバッファの番号（0か1）
+static int ready_buf = -1; //書き込みを待っているバッファの番号。無ければ -1
+static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、このページは捨てる
+static uint32_t total_bytes = 0; //バッファの中で、次に詰める位置（0〜255）
 static uint16_t n_bytes = 0;
 static uint8_t n_pages = 0;
-void log_put_page(void);
-void log_put_page(void)
+void pack_log_into_buf(void);
+void pack_log_into_buf(void)
 {   
     n_pages = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
     n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
