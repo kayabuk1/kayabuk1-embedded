@@ -231,8 +231,8 @@ static inline void AT25SF_cs_high(void){
     gpio_put(AT25SF_PIN_CS, 1);
 }
 
-static inline void AT25SF_WEL_high(void);
-static inline void AT25SF_WEL_high(void){
+static inline void AT25SF_write_enable(void);
+static inline void AT25SF_write_enable(void){
     // WEL: WriteEnableLatch
     uint8_t tx = AT25SF_WRITE_ENABLE;
     AT25SF_cs_low();
@@ -366,7 +366,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
         tx_buf[2] = (memory_address >> 8) & 0xFF;
         tx_buf[3] = memory_address;
         tx_buf[4] = data;
-        AT25SF_WEL_high();
+        AT25SF_write_enable();
         AT25SF_cs_low();
         spi_write_blocking(AT25SF_SPI_PORT, tx_buf, 5);
         AT25SF_cs_high();
@@ -452,7 +452,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //         tx_buf[18] = (now_sensors_data.vcc_mv >> 8) & 0xFF;
 //         tx_buf[19] = now_sensors_data.vcc_mv & 0xFF;
 //         restore_interrupts(ints);
-//         AT25SF_WEL_high();
+//         AT25SF_write_enable();
 //         AT25SF_cs_low();
 //         spi_write_blocking(AT25SF_SPI_PORT, tx_buf, max+4);
 //         AT25SF_cs_high();
@@ -553,7 +553,7 @@ void AT25SF_write_1page(void)
         // memcpy（メモリ・コピー）
         // あるメモリ領域の内容を別のメモリ領域へ高速にコピーするための
         // 標準ライブラリ関数。
-        AT25SF_WEL_high();
+        AT25SF_write_enable();
         AT25SF_cs_low();
         spi_write_blocking(AT25SF_SPI_PORT, tx, TX_SIZE_WRITE_PAGE);
         AT25SF_cs_high();
@@ -571,7 +571,7 @@ void AT25SF_erase_all(void){
  if(get_tactSW2())
  {
     uint8_t tx = AT25SF_CHIP_ERASE_ALL;
-    AT25SF_WEL_high();
+    AT25SF_write_enable();
     AT25SF_cs_low();
     spi_write_blocking(AT25SF_SPI_PORT, &tx, 1);
     AT25SF_cs_high();
