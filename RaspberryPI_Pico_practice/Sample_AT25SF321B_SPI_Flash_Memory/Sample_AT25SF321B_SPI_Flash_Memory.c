@@ -101,7 +101,7 @@ __________________________________________________________________
 #define AT25SF_RELEASE_POWER_DOWN 0xAB //超低消費電力モード解除
 //-----書込み、消去オペコード
 #define AT25SF_PAGE_PROGRAM 0X02 //0.4ms:1byte~256byte(1ﾍﾟｰｼﾞ)の範囲内で書込み
-#define AT25SF_BLOCK_ERASE_4KB 0X20 //0.4ms:4kB最小ﾌﾞﾛｯｸ(ｾｸﾀ)単位ﾃﾞｰﾀ消去(全ぶFFに)
+#define AT25SF_BLOCK_ERASE_4KB 0X20 //55ms:4kB最小ﾌﾞﾛｯｸ(ｾｸﾀ)単位ﾃﾞｰﾀ消去(全ぶFFに)
 #define AT25SF_BLOCK_ERASE_32KB 0X52 //120ms:32kBのﾊｰﾌﾌﾞﾛｯｸ単位で消去
 #define AT25SF_BLOCK_ERASE_64KB 0XD8 //200ms:64kBの標準ﾌﾞﾛｯｸ単位で消去
 #define AT25SF_CHIP_ERASE_ALL 0XC7 //10秒:メモリ全体を消去
