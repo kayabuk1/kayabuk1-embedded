@@ -191,8 +191,8 @@ volatile log_data_t log_data_buf
     .left_speed = 0x00FF,
     .right_speed = 0xFF00,
     .left_motor_duty = 0x0F,
-    .right_motor_duty = 0xF0,
-    .target_angular_velocity = 0xFF00,
+    .right_motor_duty = -16, //int8_t なので 0xFF=256は範囲外。負の値でシフト動作確認。
+    .target_angular_velocity = -256,　//int16_tなので0xFF00では範囲外
     .now_angular_velocity = 0x00FF,
     .vcc_mv = 0X0FF0
 };
