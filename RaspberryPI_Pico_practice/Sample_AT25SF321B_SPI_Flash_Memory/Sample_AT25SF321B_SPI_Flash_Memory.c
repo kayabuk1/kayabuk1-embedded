@@ -1,8 +1,22 @@
+
+// ◆2026年11月12日考えメモとりあえずバフに書き込む処理はある程度書けた
+// 次は、256byte 一気にAT25SFに書き込む処理だな。
+// ◆他やっておきたいこと
+// ●static inline修飾子を付けて、内部でのみ使う関数は、名前の競合の
+// 心配がないので、より短く簡潔な名称で使いやすく。例AT25SF_cs_low⇒cs_low
+// ●全消去終了完了を知らせるブザーを鳴らす回路をブレッドボードに組む。
+// ●関数の並びがグチャグチャなので、整理する。
+// ●ページ単位での処理が可能になったら、セクタ4k単位での書込み処理を実装する
+// ●ページ単位の書き込み処理が実行可能になったら、オシロで掛かる時間を実測する。
+// 
+
 #include <stdio.h>
 #include <stdint.h>
+#include<string.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 #include "hardware/sync.h"
+#include "buzzer/buzzer.h"
 
 // ========= AT25SF321B(ﾌﾗｯｼｭﾒﾓﾘ)配線表（ピン割り当て表）=====================
 // -－ピン割り当て表
@@ -31,7 +45,23 @@
 #define AT25SF_PIN_SI  7
 #define AT25SF_PIN_CS  3 
 #endif
-#define AT25SF_SPI_BAUDRATE   (1000 * 1000)
+#define AT25SF_SPI_BAUDRATE   (10 * 1000 * 1000)
+// RP2040 のSPIマスター最大速度
+// 標準システムクロック 125 MHz の場合は、その半分の 62.5 MHz（正確には分周比2で 62.5 MHz）  
+// PL022 SPIコントローラの仕様上、マスターモードでは周辺クロック（SSPCLK）
+// に対するシリアルクロック（SSPCLKOUT）の最小分周比（CPSDVSR）が
+// 偶数の「2」であるため、周辺クロックの半分が上限。
+// AT25SF321Bは通常SPIで最大 108 MHz（3.0V〜3.6V時は最大 133 MHz）まで対応
+/*原文：
+For example, at the maximum SSPCLK (clk_peri) frequency on RP2040 of 133MHz, the maximum peak bit rate in master mode is 62.5Mbps. This is achieved with the SSPCPSR register programmed with a value of 2, and the SCR[7:0] field in the SSPCR0 register programmed with a value of 0.
+The ratio of minimum SSPCLK frequency to SSPCLKOUT maximum frequency in the case of the slave mode is 12, and for the master mode, it is two.
+ F_SSPCLK(min) >= 2 * F_SSPCLKOUT(max) for master mode
+*/
+// 配線環境（物理面）の限界（一般知識）
+//  ・ブレッドボード／長いジャンパ線：配線の浮遊容量やインダクタンスによる
+// 波形なまり・反射が起きるため、10MHz〜15MHz 程度が無難。
+// ⇒結論：SPI周波数 10MHzでテストを行う。
+#define TX_SIZE_WRITE_PAGE 260
 
 /*____________________________________________________
 ◆AT25SF321B 主要ステータスレジスタビット一覧
@@ -88,11 +118,19 @@ __________________________________________________________________
 #define SECTOR_ERASE_TAKES_TIME 10000 //セクタ消去標準50ms 10ms設定
 // ===DEBUG用 printf有効化 走行時 0に===================
 #define AT25SF_DEBUG 1
-
 // #if AT25SF_DEBUG
 // printf("：%d\n",);
-// #endif
+// #endif の様にコード内にprintfを埋め込んで使う。
 
+/* ======各処理に掛かる時間（データシートp.55より）=======
+処理内容：データシートの記号表記：標準値(Typ)：最大値(Max)
+ページ書き込み（256バイト）：tPP：0.4ms：3.4ms
+セクタ消去（4 kBytes）：tBLKE：55ms：250ms
+ﾊｰﾌﾌﾞﾛｯｸ消去（32 kBytes）：tBLKE：120ms：450ms
+ブロック消去（64 kBytes）：tBLKE：200ms：700ms
+チップ全消去（Chip Erase）：tCHIP：10sec：30sec
+ステータスレジスタ書込み：tWRSR：5ms：30ms
+ ====================================================*/
 typedef union{
     uint8_t bytes[256]; //256Bytes (000000h〜0000FFh）
 }Page_256B_t; //16384個
@@ -129,7 +167,7 @@ typedef union{
 typedef struct log_data
 {
     uint8_t sensor_displacement;
-    uint8_t senor_binary;
+    uint8_t sensor_binary;
     uint16_t target_speed;
     uint16_t left_speed;
     uint16_t right_speed;
@@ -140,7 +178,26 @@ typedef struct log_data
     uint16_t vcc_mv;
 }log_data_t; //計16byte
 
+
+
+#if AT25SF_DEBUG 
+// ダミーデータを設定。
+volatile log_data_t log_data_buf 
+= {
+    .sensor_displacement = 0x0F,
+    .sensor_binary = 0xF0,
+    .target_speed = 0xF0F0,
+    .left_speed = 0x00FF,
+    .right_speed = 0xFF00,
+    .left_motor_duty = 0x0F,
+    .right_motor_duty = 0xF0,
+    .target_angular_velocity = 0xFF00,
+    .now_angular_velocity = 0x00FF,
+    .vcc_mv = 0X0FF0
+};
+#elif AT25SF_DEBUG 
 volatile log_data_t log_data_buf = {0};
+#endif
 
 #if 0 //RP2350は内蔵SRAM 520KB のため、こんな変数は使えない。
 // データ構造把握用
@@ -154,23 +211,6 @@ typedef union{
 #endif
 
 // ------ハードウェアドライバ部分
-void AT25SF_init(void); 
-//この名前だと最初の初期化処理もするみたいに見えるな
-
-void AT25SF_init(void) {
-    spi_init(AT25SF_SPI_PORT, AT25SF_SPI_BAUDRATE);
-    spi_set_format(
-        AT25SF_SPI_PORT, 8, SPI_CPOL_0
-        , SPI_CPHA_0, SPI_MSB_FIRST);
-        
-    gpio_set_function(AT25SF_PIN_SI, GPIO_FUNC_SPI);
-    gpio_set_function(AT25SF_PIN_SO, GPIO_FUNC_SPI);
-    gpio_set_function(AT25SF_PIN_SCK,  GPIO_FUNC_SPI);
-
-    gpio_init(AT25SF_PIN_CS);
-    gpio_set_dir(AT25SF_PIN_CS, GPIO_OUT);
-    gpio_put(AT25SF_PIN_CS, 1);
-}
 
 // -----タイマー割り込みで書込み＆読み出す部分
 bool AT25SF_write_timer_start(int64_t intervar_us);
@@ -179,13 +219,26 @@ bool AT25SF_write_timer_start(int64_t intervar_us);
 
 // -----タイマー割込みの中で呼ばれる関数や、その他基本関数
 
-void cs_low(void);
-void cs_low(void){
+static inline void AT25SF_cs_low(void);
+static inline void AT25SF_cs_low(void){
     gpio_put(AT25SF_PIN_CS, 0);
 }
-void cs_high(void);
-void cs_high(void){
+static inline void AT25SF_cs_high(void);
+static inline void AT25SF_cs_high(void){
     gpio_put(AT25SF_PIN_CS, 1);
+}
+
+static inline void AT25SF_WEL_high(void);
+static inline void AT25SF_WEL_high(void){
+    // WEL: WriteEnableLatch
+    uint8_t tx = AT25SF_WRITE_ENABLE;
+    AT25SF_cs_low();
+    spi_write_blocking(AT25SF_SPI_PORT, &tx, 1);
+    AT25SF_cs_high();
+    // WriteEnaaleコマンド 06hを送信し、書込み許可BIT(WEL)を１に。
+    // WELが１になるのは CS が HIGH になった瞬間。
+    // この後、データの書き込み処理などが続き、BUSYBITが０になると、
+    // 自動的に WELBIT も ０ み戻る。
 }
 
 
@@ -195,13 +248,14 @@ uint8_t read_status_register_1(void);
  * @return 取得したステータスレジスタ1の8bitデータ
  */
 uint8_t read_status_register_1(void)
-{
-    uint8_t data;
-    cs_low();
+{   
+    uint8_t tx[2] = {READ_STATUS_REGISTER_1, 0x00};
+    uint8_t rx[2] = {0};
+    AT25SF_cs_low();
     spi_write_read_blocking(
-        AT25SF_SPI_PORT, READ_STATUS_REGISTER_1, &data, 1);
-    cs_high();
-    return data;
+        AT25SF_SPI_PORT, tx, rx, 2);
+    AT25SF_cs_high();
+    return rx[1];
 }
 
 bool read_status_is_busy(void);
@@ -211,16 +265,20 @@ bool read_status_is_busy(void);
  */
 bool read_status_is_busy(void)
 {
-    bool status;
     uint8_t opecode = READ_STATUS_REGISTER_1;
-    cs_low();
+    uint8_t tx[2] = {opecode, 0x00};
+    uint8_t rx[2] = {0};
+    AT25SF_cs_low();
     spi_write_read_blocking(
-        AT25SF_SPI_PORT, &opecode, &status, 2);
+        AT25SF_SPI_PORT, tx, rx, 2);
     // opecodeの8バイト後のダミービット8バイト送信して、
-    // 8バイトのレジスタ1のデータが返ってくるので、送るデータ数は2。
+    // 8ビットのレジスタ1のデータが返ってくるので、送るデータ数は2。
     // SPIはリングバッファなので、受信するには同じサイズのデータを送っている。
-    cs_high();
-    return status & 0x01;
+    AT25SF_cs_high();
+    bool status = rx[1] & 0x01;
+    // なので opecode 送信時にもダミーデータ8bitを受信している。
+    // なので、ステータスレジスタが入っているのはrx[1]。
+    return status;
     // Ready/BusyBITが 1の時Busy,0の時Ready。
 }
 // ◆割り込み処理考えメモ
@@ -274,8 +332,6 @@ bool(*polling_timer_callback)(repeating_timer_t *))
 // みたいにして増やしていくのが良いのだろうか？
 // 全送信データは書込みなら40bit
 
-
-
 void AT25SF_send_opecode(uint8_t opecode);
 void AT25SF_send_opecode(uint8_t opecode)
 {
@@ -284,10 +340,10 @@ void AT25SF_send_opecode(uint8_t opecode)
         return;
     }
     else
-    {
-        cs_low();
+    {   
+        AT25SF_cs_low();    
         spi_write_blocking(AT25SF_SPI_PORT, &opecode, 1);
-        cs_high();
+        AT25SF_cs_high();
     }
 }
 
@@ -297,7 +353,7 @@ static uint8_t page_count = 0;
 void AT25SF_write_byte(uint8_t opecode, uint8_t data);
 void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 {
-    if(opecode==NULL) return;
+    // if(opecode==NULL) return; //ninja: build stopped: subcommand failed.
     if(read_status_is_busy()){
         return;
     }else{
@@ -307,9 +363,10 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
         tx_buf[2] = (memory_address >> 8) & 0xFF;
         tx_buf[3] = memory_address;
         tx_buf[4] = data;
-        cs_low();
+        AT25SF_WEL_high();
+        AT25SF_cs_low();
         spi_write_blocking(AT25SF_SPI_PORT, tx_buf, 5);
-        cs_high();
+        AT25SF_cs_high();
         // 256byteを越えてページが跨ってしまう場合は、ページを変える
         // 処理を書く必要がある。
         /*◆memory_addressについて
@@ -355,69 +412,172 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 
     }
 }
-void AT25SF_write_page(uint8_t opecode, uint8_t data_array[]);
-void AT25SF_write_page(uint8_t opecode, uint8_t data_array[])
-{
 
+// ◆logデータをそのまま16byte取得ごとにAT25SFへSPI通信するのは、
+// オーバヘッドが大きく、マイクロマウス制御に影響を及ぼすため、
+// 間にダブルバッファを挟み256byte一気に送信する方針に変更。
+// そのためコメントアウト。後ほど削除するか検討。
+// // log_dataを送る前に、データを取得して log_data_bufに保存する処理が必要か。
+// void AT25SF_write_log(void);
+// void AT25SF_write_log(void) //log_dataを送るのは明らかなので引数なし
+// {
+//     uint8_t opecode = AT25SF_PAGE_PROGRAM;
+//     if(read_status_is_busy()){
+//         return;
+//     }else{
+//         size_t max = sizeof(log_data_t)/sizeof(uint8_t);
+//         uint8_t tx_buf[max + 4];
+//         tx_buf[0] = opecode;
+//         tx_buf[1] = (memory_address >> 16) & 0xFF;
+//         tx_buf[2] = (memory_address >> 8) & 0xFF;
+//         tx_buf[3] = memory_address;
+//         uint32_t ints = save_and_disable_interrupts();
+//         tx_buf[4] = log_data_buf.sensor_displacement;
+//         tx_buf[5] = log_data_buf.sensor_binary;
+//         tx_buf[6] = (log_data_buf.target_speed >> 8) & 0xFF;
+//         tx_buf[7] = log_data_buf.target_speed & 0xFF;
+//         tx_buf[8] = (log_data_buf.left_speed >> 8) & 0xFF;
+//         tx_buf[9] = log_data_buf.left_speed & 0xFF;
+//         tx_buf[10] = (log_data_buf.right_speed >> 8) & 0xFF;
+//         tx_buf[11] = log_data_buf.right_speed & 0xFF;
+//         tx_buf[12] = log_data_buf.left_motor_duty;
+//         tx_buf[13] = log_data_buf.right_motor_duty;
+//         tx_buf[14] = ((uint16_t)log_data_buf.target_angular_velocity >> 8) & 0xFF;
+//         tx_buf[15] = log_data_buf.target_angular_velocity & 0xFF;
+//         tx_buf[16] = ((uint16_t)log_data_buf.now_angular_velocity >> 8) & 0xFF;
+//         tx_buf[17] = log_data_buf.now_angular_velocity & 0xFF;
+//         tx_buf[18] = (log_data_buf.vcc_mv >> 8) & 0xFF;
+//         tx_buf[19] = log_data_buf.vcc_mv & 0xFF;
+//         restore_interrupts(ints);
+//         AT25SF_WEL_high();
+//         AT25SF_cs_low();
+//         spi_write_blocking(AT25SF_SPI_PORT, tx_buf, max+4);
+//         AT25SF_cs_high();
+//         // 1MHzで20バイト送ると約160µsかかる（8μs*20）。
+//         // 1msの制御周期のうち、16%をSPIの待ちで使ってしまう。
+//         // ➡フラッシュへの記録SPI通信で割込みを行うのは難しい。
+//         memory_address += sizeof(log_data_t); 
+//         // 10進数の「16」は16進数で 0x10 なので、
+//         // 毎回下から2桁目が +1 される（0x00 ➔ 0x10 ➔ 0x20 ➔ ...0xF0）。
+//         // 16回目で桁上がりして、0x100になって下位2ビットが0x00に戻る。
+//         // これでピッタリ256バイト(1ページ)になる。
+//         // if((memory_address & 0X0F) != 0x00)
+//         // // 0xFF = 0b1111_1111 = 255
+//         // // 10進数の16は 2進数では 0b00010000。
+//         // // 16ずつ増やすと、下位4ビットはずっと 0000 のまま固定。
+//         // // なので、アドレスを0x0Fでマスクして下位4ビットを取り出して、
+//         // // それが 0000 で無ければずれていると判定してアドレスを修正する。
+//         // {
+//         //     memory_address = (memory_address & ~0x0F)+0x10;
+//         // }⇒ここのifは、16刻みで送るなら、
+//         // なくても大丈夫と判断。一時コメントアウト。
+//     }
+// }
+
+static uint32_t total_bytes = 0;
+static uint16_t n_bytes = 0;
+static uint8_t n_pages = 0;
+void log_put_page(void);
+void log_put_page(void)
+{   
+    log_page_buf[n_pages].bytes[n_bytes] = log_data_buf.sensor_displacement;
+    log_page_buf[n_pages].bytes[n_bytes+1] = log_data_buf.sensor_binary;
+    log_page_buf[n_pages].bytes[n_bytes+2] = (log_data_buf.target_speed >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+3] = log_data_buf.target_speed & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+4] = (log_data_buf.left_speed >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+5] = log_data_buf.left_speed & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+6] = (log_data_buf.right_speed >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+7] = log_data_buf.right_speed & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+8] = log_data_buf.left_motor_duty;
+    log_page_buf[n_pages].bytes[n_bytes+9] = log_data_buf.right_motor_duty;
+    log_page_buf[n_pages].bytes[n_bytes+10] = ((uint16_t)log_data_buf.target_angular_velocity >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+11] = log_data_buf.target_angular_velocity & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+12] = ((uint16_t)log_data_buf.now_angular_velocity >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+13] = log_data_buf.now_angular_velocity & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+14] = (log_data_buf.vcc_mv >> 8) & 0xFF;
+    log_page_buf[n_pages].bytes[n_bytes+15] = log_data_buf.vcc_mv & 0xFF;
+    // ◆いや、forで回すのでなくて、割り込みで呼ばれることを想定して、
+    // 配列の指定を、%16,%256などを使って、staticかグローバルにして管理して、
+    // 値の格納処理後に、カウントを進める書き方に変える必要があるかな。
+    // それで256byte=1pageバッファに値が溜まったら、startwritelogAT25SF
+    // みたいな非同期処理の関数を呼び出してスタートさせる処置みたいに掛けたら
+    // 理想だな。
+    total_bytes += 16;
+
+    // if(n_bytes >= 256) start_write_AT25SF();
+    // みたいに256になったら書込み処理をスタートさせたい。
+    n_pages = (total_bytes / 256) % 2; 
+    //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
+    n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
+    // if (n_bytes >= 256){
+    //     n_pages = n_pages ^ 1;
+    // } ifを使った方が分かりやすいかもしれない、、、。
+    if(total_bytes % 256 == 0){ //一ページ溜まった瞬間。
+        if(read_status_is_busy()){
+            total_bytes -= 256; //今のページを捨てて同じページに最初から
+        }
+    }
 }
-// log_dataを送る前に、データを取得して log_data_bufに保存する処理が必要か。
-void AT25SF_write_log();
-void AT25SF_write_log() //log_dataを送るのは明らかなので引数なし
+
+// 256byte=1pageをまとめて書き込む関数。
+void AT25SF_write_1page(void);
+void AT25SF_write_1page(void)
 {
-    uint8_t opecode = AT25SF_PAGE_PROGRAM;
     if(read_status_is_busy()){
         return;
     }else{
-        size_t max = sizeof(log_data_t)/sizeof(uint8_t);
-        uint8_t tx_buf[max + 4];
-        tx_buf[0] = opecode;
-        tx_buf[1] = (memory_address >> 16) & 0xFF;
-        tx_buf[2] = (memory_address >> 8) & 0xFF;
-        tx_buf[3] = memory_address;
+        // uint16_t max = (sizeof(Page_256B_t)/2) + 4;
+        // uint8_t tx[max] = {0};
+        // ⚠↑の書き方は間違い。配列の要素数指定する max が、
+        // コンパイル時に決まらず、実行時に決まる普通の変数(可変長配列)
+        // になっているためサイズがコンパイル時に分からないため、
+        // ={0};で一括に初期化できない。
+        uint8_t tx[TX_SIZE_WRITE_PAGE] = {0};
+        uint8_t opecode = AT25SF_PAGE_PROGRAM;
+        tx[0] = opecode;
+        tx[1] = (memory_address >> 16) & 0xFF;
+        tx[2] = (memory_address >> 8) & 0xFF;
+        tx[3] = memory_address;
         uint32_t ints = save_and_disable_interrupts();
-        tx_buf[4] = log_data_buf.sensor_displacement;
-        tx_buf[5] = log_data_buf.senor_binary;
-        tx_buf[6] = (log_data_buf.target_speed >> 8) & 0xFF;
-        tx_buf[7] = log_data_buf.target_speed & 0xFF;
-        tx_buf[8] = (log_data_buf.left_speed >> 8) & 0xFF;
-        tx_buf[9] = log_data_buf.left_speed & 0xFF;
-        tx_buf[10] = (log_data_buf.right_speed >> 8) & 0xFF;
-        tx_buf[11] = log_data_buf.right_speed & 0xFF;
-        tx_buf[12] = log_data_buf.left_motor_duty;
-        tx_buf[13] = log_data_buf.right_motor_duty;
-        tx_buf[14] = ((uint16_t)log_data_buf.target_angular_velocity >> 8) & 0xFF;
-        tx_buf[15] = log_data_buf.target_angular_velocity & 0xFF;
-        tx_buf[16] = ((uint16_t)log_data_buf.now_angular_velocity >> 8) & 0xFF;
-        tx_buf[17] = log_data_buf.now_angular_velocity & 0xFF;
-        tx_buf[18] = (log_data_buf.vcc_mv >> 8) & 0xFF;
-        tx_buf[19] = log_data_buf.vcc_mv & 0xFF;
+        memcpy(
+            &tx[4], log_page_buf[!n_pages].bytes, 256);
         restore_interrupts(ints);
-        cs_low();
-        spi_write_blocking(AT25SF_SPI_PORT, tx_buf, max+4);
-        cs_high();
-        // 1MHzで20バイト送ると約160µsかかる（8μs*20）。
-        // 1msの制御周期のうち、16%をSPIの待ちで使ってしまう。
-        // ➡フラッシュへの記録SPI通信で割込みを行うのは難しい。
-        memory_address += sizeof(log_data_t); 
-        // 10進数の「16」は16進数で 0x10 なので、
-        // 毎回下から2桁目が +1 される（0x00 ➔ 0x10 ➔ 0x20 ➔ ...0xF0）。
-        // 16回目で桁上がりして、0x100になって下位2ビットが0x00に戻る。
-        // これでピッタリ256バイト(1ページ)になる。
-        if((memory_address & 0X0F) != 0x00)
-        // 0xFF = 0b1111_1111 = 255
-        // 10進数の16は 2進数では 0b00010000。
-        // 16ずつ増やすと、下位4ビットはずっと 0000 のまま固定。
-        // なので、アドレスを0x0Fでマスクして下位4ビットを取り出して、
-        // それが 0000 で無ければずれていると判定してアドレスを修正する。
-        {
-            memory_address = (memory_address & ~0x0F)+0x10;
-        }
+        // void *memcpy
+        // (void *__restrict__, const void *__restrict__, size_t)
+        // コピー先のメモリ領域のポインタ, コピー元のメモリ領域のポインタ, コピーするサイズ（バイト数）
+        // memcpy（メモリ・コピー）
+        // あるメモリ領域の内容を別のメモリ領域へ高速にコピーするための
+        // 標準ライブラリ関数。
+        AT25SF_WEL_high();
+        AT25SF_cs_low();
+        spi_write_blocking(AT25SF_SPI_PORT, tx, TX_SIZE_WRITE_PAGE);
+        AT25SF_cs_high();
+        memory_address += 256; 
     }
 }
 
 
 // ↓初期化関数の中で呼ぶ全メモリ消去関数
-void AT25SF_erase_all();
+void AT25SF_erase_all(void);
+void AT25SF_erase_all(void){
+    uint8_t tx = AT25SF_CHIP_ERASE_ALL;
+    AT25SF_WEL_high();
+    AT25SF_cs_low();
+    spi_write_blocking(AT25SF_SPI_PORT, &tx, 1);
+    AT25SF_cs_high();
+    // CSピンを High に戻した瞬間にIC内部で自動消去が始まる。
+    // Chip Erase(全ﾒﾓﾘ領域の初期化※全て0xFF=１になる)
+    // 全領域の消去には約10秒程度掛かる見込み
+    while (read_status_is_busy())
+    {
+        sleep_ms(1000);
+    }
+    for(int i=0; i <1000; i++){
+        beepProcess();
+        sleep_ms(1);
+    }
+}
+
 
 void AT25SF_read_jedec_id(uint8_t id[3]) {
     uint8_t opecode = JEDEC_ID_READ;
@@ -428,10 +588,31 @@ void AT25SF_read_jedec_id(uint8_t id[3]) {
     printf("%02X %02X %02X\n", id[0], id[1], id[2]);
 }
 
+void AT25SF_init(void); 
+//この名前だと最初の初期化処理もするみたいに見えるな
+
+void AT25SF_init(void) {
+    spi_init(AT25SF_SPI_PORT, AT25SF_SPI_BAUDRATE);
+    spi_set_format(
+        AT25SF_SPI_PORT, 8, SPI_CPOL_0
+        , SPI_CPHA_0, SPI_MSB_FIRST);
+        
+    gpio_set_function(AT25SF_PIN_SI, GPIO_FUNC_SPI);
+    gpio_set_function(AT25SF_PIN_SO, GPIO_FUNC_SPI);
+    gpio_set_function(AT25SF_PIN_SCK,  GPIO_FUNC_SPI);
+
+    gpio_init(AT25SF_PIN_CS);
+    gpio_set_dir(AT25SF_PIN_CS, GPIO_OUT);
+    gpio_put(AT25SF_PIN_CS, 1);
+
+    AT25SF_erase_all();
+}
 
 int main()
 {
     stdio_init_all();
+    initBeep();
+
     AT25SF_init();
 
     while (true) {

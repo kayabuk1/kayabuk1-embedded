@@ -35,7 +35,11 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(Sample_AT25SF321B_SPI_Flash_Memory Sample_AT25SF321B_SPI_Flash_Memory.c )
+add_executable(
+    Sample_AT25SF321B_SPI_Flash_Memory 
+    Sample_AT25SF321B_SPI_Flash_Memory.c 
+    buzzer/buzzer.c
+    )
 
 pico_set_program_name(Sample_AT25SF321B_SPI_Flash_Memory "Sample_AT25SF321B_SPI_Flash_Memory")
 pico_set_program_version(Sample_AT25SF321B_SPI_Flash_Memory "0.1")
@@ -48,6 +52,8 @@ pico_enable_stdio_usb(Sample_AT25SF321B_SPI_Flash_Memory 1)
 target_link_libraries(Sample_AT25SF321B_SPI_Flash_Memory
         pico_stdlib
         hardware_spi
+        hardware_pwm
+        hardware_clocks
         )
 
 # Add the standard include files to the build
