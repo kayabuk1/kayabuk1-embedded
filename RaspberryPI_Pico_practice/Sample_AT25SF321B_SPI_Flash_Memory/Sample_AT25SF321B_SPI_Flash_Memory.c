@@ -562,6 +562,8 @@ void AT25SF_write_1page(void)
 // ↓初期化関数の中で呼ぶ全メモリ消去関数
 void AT25SF_erase_all(void);
 void AT25SF_erase_all(void){
+ if(get_tactSW2())
+ {
     uint8_t tx = AT25SF_CHIP_ERASE_ALL;
     AT25SF_WEL_high();
     AT25SF_cs_low();
@@ -574,10 +576,17 @@ void AT25SF_erase_all(void){
     {
         sleep_ms(1000);
     }
-    for(int i=0; i <1000; i++){
+    for(int i=0; i <1000; i++)
+    {
         beepProcess();
+        out_led2(1);
         sleep_ms(1);
     }
+ }
+ else
+ {
+  return;
+ }
 }
 
 
