@@ -606,15 +606,36 @@ void AT25SF_init(void) {
     gpio_init(AT25SF_PIN_CS);
     gpio_set_dir(AT25SF_PIN_CS, GPIO_OUT);
     gpio_put(AT25SF_PIN_CS, 1);
-
-    AT25SF_erase_all();
+}
+void AT25_hardware_setup(vodi)
+{
+  gpio_set_function(10, GPIO_FUNC_SIO);
+  gpio_set_function(13, GPIO_FUNC_SIO);
+  gpio_set_dir(10, GPIO_OUT);
+ // Picoボード上のSW0の入力を受け付けるための準備
+  gpio_set_dir(13, GPIO_IN);
+  // SWに接続されているGPIOのpull up抵抗をONに。
+  gpio_pull_up(13);
+}
+/*led2を点滅*/
+void out_led2(bool on)
+{
+    gpio_put(10, on);
+}
+// SWの状態を読取る関数
+bool get_tactSW2(void)
+{
+    return !gpio_get(13);
+    // ボード上のSWは押すとLow、通常時Highなので、
+    // 直感的に押されたとき「１」になるように、
+    // 「!」で論理反転をする。
 }
 
 int main()
 {
     stdio_init_all();
+    AT25_hardware_setup();
     initBeep();
-
     AT25SF_init();
 
     while (true) {
