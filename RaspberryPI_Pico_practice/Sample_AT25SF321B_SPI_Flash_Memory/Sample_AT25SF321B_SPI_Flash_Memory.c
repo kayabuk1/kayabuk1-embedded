@@ -477,7 +477,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //     }
 // }
 
-static uint now_fill //割り込みが今詰めているバッファの番号（0か1）
+static uint now_fill = 0; //割り込みが今詰めているバッファの番号（0か1）
 static int ready_buf = -1; //書き込みを待っているバッファの番号。無ければ -1
 static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、このページは捨てる
 static uint32_t total_bytes = 0; //バッファの中で、次に詰める位置（0〜255）
