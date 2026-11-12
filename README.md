@@ -14,6 +14,7 @@ Arduino（ATmega328P）のライントレーサーから始め、現在は Raspb
 | [RaspberryPI_Pico_practice/Sample_ADC05_MCP3208](https://github.com/kayabuk1/kayabuk1-embedded/tree/main/RaspberryPI_Pico_practice/Sample_ADC05_MCP3208) | 8ch・12bit ADコンバータ MCP3208 のドライバ | Raspberry Pi Pico |
 | [RaspberryPI_Pico_practice/Sample_ADC04_MCP3002](https://github.com/kayabuk1/kayabuk1-embedded/tree/main/RaspberryPI_Pico_practice/Sample_ADC04_MCP3002) | 2ch・10bit ADコンバータ MCP3002 のドライバ | Raspberry Pi Pico |
 | [RaspberryPI_Pico_practice/Sample_matrixLED03](https://github.com/kayabuk1/kayabuk1-embedded/tree/main/RaspberryPI_Pico_practice/Sample_matrixLED03) | 8x8 マトリクスLED の表示 | Raspberry Pi Pico |
+| [RaspberryPI_Pico_practice/Sample_AT25SF321B_SPI_Flash_Memory](https://github.com/kayabuk1/kayabuk1-embedded/tree/main/RaspberryPI_Pico_practice/Sample_AT25SF321B_SPI_Flash_Memory) |フラッシュメモリ AT25SF321B のドライバ | Raspberry Pi Pico |
 | [20260311_maiconLineTracer_Stable1.0](https://github.com/kayabuk1/kayabuk1-embedded/tree/main/20260311_maiconLineTracer_Stable1.0) | ライントレーサー（Stable 1.0） | ATmega328P（Arduino UNO互換） |
 | archive ほか | 学習初期の練習コード（LED点滅、ブザー、PWMなど） | ATmega328P |
 
