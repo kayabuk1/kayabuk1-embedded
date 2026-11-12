@@ -180,7 +180,7 @@ typedef struct log_data
 
 
 
-#if AT25SF_DEBUG 
+#if AT25SF_DEBUG==1
 // ダミーデータを設定。
 volatile log_data_t log_data_buf 
 = {
@@ -195,7 +195,7 @@ volatile log_data_t log_data_buf
     .now_angular_velocity = 0x00FF,
     .vcc_mv = 0X0FF0
 };
-#elif AT25SF_DEBUG 
+#else
 volatile log_data_t log_data_buf = {0};
 #endif
 
