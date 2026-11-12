@@ -483,8 +483,8 @@ static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、こ�
 static uint32_t total_bytes = 0; //バッファの中で、次に詰める位置（0〜255）
 static uint16_t n_bytes = 0;
 static uint8_t n_pages = 0;
-void pack_log_into_buf(void);
-void pack_log_into_buf(void)
+void put_log_into_pagebuf(void);
+void put_log_into_pagebuf(void)
 {   
     n_pages = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
     n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
