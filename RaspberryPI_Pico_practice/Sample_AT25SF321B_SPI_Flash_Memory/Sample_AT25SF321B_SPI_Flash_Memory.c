@@ -209,7 +209,9 @@ typedef union{
     uint8_t bytes[4194304];
 }AT25SF321B_AllMemory_32Mbit_t;
 #endif
-
+// ===グローバル変数========================
+static bool ready = 0;
+// ==========================================
 // ------ハードウェアドライバ部分
 
 // -----タイマー割り込みで書込み＆読み出す部分
@@ -480,6 +482,11 @@ static uint8_t n_pages = 0;
 void log_put_page(void);
 void log_put_page(void)
 {   
+    n_pages = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
+    n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
+    // if (n_bytes >= 256){
+    //     n_pages = n_pages ^ 1;
+    // } ifを使った方が分かりやすいかもしれない、、、。
     log_page_buf[n_pages].bytes[n_bytes] = log_data_buf.sensor_displacement;
     log_page_buf[n_pages].bytes[n_bytes+1] = log_data_buf.sensor_binary;
     log_page_buf[n_pages].bytes[n_bytes+2] = (log_data_buf.target_speed >> 8) & 0xFF;
@@ -506,14 +513,8 @@ void log_put_page(void)
 
     // if(n_bytes >= 256) start_write_AT25SF();
     // みたいに256になったら書込み処理をスタートさせたい。
-    n_pages = (total_bytes / 256) % 2; 
-    //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
-    n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
-    // if (n_bytes >= 256){
-    //     n_pages = n_pages ^ 1;
-    // } ifを使った方が分かりやすいかもしれない、、、。
     if(total_bytes % 256 == 0){ //一ページ溜まった瞬間。
-        if(read_status_is_busy()){
+        if(ready){
             total_bytes -= 256; //今のページを捨てて同じページに最初から
         }
     }
