@@ -39,6 +39,7 @@ add_executable(
     Sample_AT25SF321B_SPI_Flash_Memory 
     Sample_AT25SF321B_SPI_Flash_Memory.c 
     buzzer/buzzer.c
+    pico_led_sw/pico_led_sw.c
     )
 
 pico_set_program_name(Sample_AT25SF321B_SPI_Flash_Memory "Sample_AT25SF321B_SPI_Flash_Memory")
