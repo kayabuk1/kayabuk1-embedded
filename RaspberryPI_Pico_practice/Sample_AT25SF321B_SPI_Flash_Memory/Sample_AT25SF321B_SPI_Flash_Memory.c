@@ -560,6 +560,9 @@ void AT25SF_write_1page(void)
 
 
 // ↓初期化関数の中で呼ぶ全メモリ消去関数
+// ➡毎回電源起動時の初期化で呼んでしまうと、ログのデータを読み出そうと電源
+// を入れた時にログが消えてしまう。
+// ➡SW２を押した時に実行する様に変更。
 void AT25SF_erase_all(void);
 void AT25SF_erase_all(void){
  if(get_tactSW2())
@@ -648,6 +651,7 @@ int main()
     AT25SF_init();
 
     while (true) {
+        AT25SF_erase_all();
         uint8_t id[3] = {0};
         AT25SF_read_jedec_id(id);
         sleep_ms(1000);
