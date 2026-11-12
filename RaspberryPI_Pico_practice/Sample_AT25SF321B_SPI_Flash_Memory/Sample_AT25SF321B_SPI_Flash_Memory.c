@@ -483,14 +483,9 @@ static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、こ�
 static uint32_t total_bytes = 0; //バッファの中で、次に詰める位置（0〜255）
 static uint16_t n_bytes = 0;
 static uint8_t n_pages = 0;
-void put_log_into_pagebuf(void);
-void put_log_into_pagebuf(void)
-{   
-    n_pages = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
-    n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
-    // if (n_bytes >= 256){
-    //     n_pages = n_pages ^ 1;
-    // } ifを使った方が分かりやすいかもしれない、、、。
+void pack_log16b_into_pagebuf(uint8_t *buf);
+void pack_log16b_into_pagebuf(uint8_t *buf)
+{
     log_page_buf[n_pages].bytes[n_bytes] = now_sensors_data.sensor_displacement;
     log_page_buf[n_pages].bytes[n_bytes+1] = now_sensors_data.sensor_binary;
     log_page_buf[n_pages].bytes[n_bytes+2] = (now_sensors_data.target_speed >> 8) & 0xFF;
@@ -513,6 +508,17 @@ void put_log_into_pagebuf(void)
     // それで256byte=1pageバッファに値が溜まったら、startwritelogAT25SF
     // みたいな非同期処理の関数を呼び出してスタートさせる処置みたいに掛けたら
     // 理想だな。
+}
+
+void put_log_into_pagebuf(void);
+void put_log_into_pagebuf(void)
+{   
+    n_pages = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
+    n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
+    // if (n_bytes >= 256){
+    //     n_pages = n_pages ^ 1;
+    // } ifを使った方が分かりやすいかもしれない、、、。
+
     total_bytes += 16;
 
     // if(n_bytes >= 256) start_write_AT25SF();
