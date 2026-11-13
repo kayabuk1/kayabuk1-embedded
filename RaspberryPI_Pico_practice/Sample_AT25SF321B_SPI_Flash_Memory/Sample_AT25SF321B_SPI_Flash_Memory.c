@@ -227,7 +227,7 @@ volatile Sensors_data_t now_sensors_data = {0};
 typedef struct {
     uint64_t chip_erase_time;
     uint32_t write_1page_time[1024];
-    uint16_t write_count;
+    uint64_t write_count;
     uint64_t read_time;
 }mesurement_time_t;
 mesurement_time_t mesurement_time = {0};
@@ -313,7 +313,8 @@ bool read_status_is_busy(void)
     // SPIはリングバッファなので、受信するには同じサイズのデータを送っている。
     AT25SF_cs_high();
     bool status = rx[1] & 0x01;
-    flash_state = status;
+    printf("BUSY/REDY：%d\n",status);
+    flash_state = !status;
     // なので opecode 送信時にもダミーデータ8bitを受信している。
     // なので、ステータスレジスタが入っているのはrx[1]。
     return status;
@@ -582,9 +583,6 @@ void log_pack(uint8_t *dst, const volatile Sensors_data_t *src)
     dst[15] = src->vcc_mv & 0xFF;
     restore_interrupts(ints);
 
-    #if AT25SF_DEBUG
-    pack_random_sensordata();
-    #endif
     // ◆呼び出し側で log_pack(
     // &log_page_buf[now_filling].bytes[nth_byte], &now_sensors_data);
     // と、nth_byte 分進めたアドレスを渡しているので、
@@ -618,6 +616,10 @@ void log_put(void)
     total_bytes += 16;
     // ↑log_pack()は詰めるだけに徹して、total_byte加算はより大きい役割の
     // log_put()内に記述。
+
+    #if AT25SF_DEBUG
+    pack_random_sensordata();
+    #endif
     // ●メモ：if(nth_byte >= 256) start_write_AT25SF();
     // みたいに256になったら書込み処理をスタートさせたい。
     if(total_bytes % 256 == 0){ //一ページ溜まった瞬間。
@@ -632,11 +634,11 @@ void log_put(void)
             switch (now_filling)
             {
             case BUF_A:
-            buf_state = BUF_B;
+            buf_state = BUF_A;
                 break;
             
             case BUF_B:
-            buf_state = BUF_A;
+            buf_state = BUF_B;
                 break;
             }
             // buf_state = now_filling;
@@ -703,7 +705,10 @@ bool log_write_1page(uint8_t page) //page:0ならA、1ならB
         uint32_t elapsed_time = end_time - start_time;
         mesurement_time.write_1page_time[mesurement_time.write_count]
         = elapsed_time;
-        mesurement_time.write_count++;
+        if(mesurement_time.write_count < 1024){
+            mesurement_time.write_count++;
+        }
+        
         #if AT25SF_DEBUG
         printf("1page書込み時間：%lu μs\n", elapsed_time);
         #endif
@@ -733,14 +738,14 @@ void AT25SF_erase_all(void){
     // Chip Erase(全ﾒﾓﾘ領域の初期化※全て0xFF=１になる)
     // 全領域の消去には約10秒程度掛かる見込み
     while (read_status_is_busy())
-    {
+    {   printf("WHILE内BUSY/REDY：%d\n",read_status_is_busy());
         sleep_ms(1000);
     }
     uint64_t end_time = time_us_64();
     uint64_t elapsed_time = end_time - start_time;
     mesurement_time.chip_erase_time = elapsed_time;
     #if AT25SF_DEBUG
-    printf("全消去書込み時間：%llu μs\n", elapsed_time);
+    printf("全消去時間：%llu μs\n", elapsed_time);
     #endif
 
     erase_completed_flag = true;
@@ -785,17 +790,17 @@ void flash_task(void)   // mainループで毎回呼ぶ。すぐに戻る
     }
 }
 
-AT25SF_read(uint32_t addr, uint8_t *buf, size_t len);
+void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len);
 // #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
 // #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
 static uint8_t read_buf[65536] = {0};
 // 関数の内側（ローカル変数）で uint8_t tx[65536] と rx[65536] を取ると、合計約131KBのスタックを消費します。Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こします（一般知識）。
 // 
-AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
+void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
 {
     uint64_t start_time = time_us_64();
     uint8_t opecode = AT25SF_NORMAL_READ;
-    uint32_t read_address = 0x00000000; //0000_0000h~3FFFFFh
+    uint32_t read_address = addr; //0000_0000h~3FFFFFh
     uint8_t tx[4] = {0};
 
     
@@ -807,16 +812,16 @@ AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
         AT25SF_cs_low();
         uint32_t start_read_block_time = time_us_32();
         spi_write_blocking(AT25SF_SPI_PORT, tx, 4);
-        spi_read_blocking(AT25SF_SPI_PORT, 0x00, read_buf, len);
+        spi_read_blocking(AT25SF_SPI_PORT, 0x00, buf, len);
         AT25SF_cs_high();
         read_address += 0x10000;
         uint32_t end_read_block_time = time_us_32();
         uint32_t elapsed_time = 
         end_read_block_time - start_read_block_time;
         printf("64kB[%d]読み出しタイム：%lu μs\n", i, elapsed_time);
-        // for (uint32_t j = 0; j < 65536; j++){
-        //    printf("%dバイト目データ：%d\n",j, read_buf[j]);
-        // }
+        for (uint32_t j = 0; j < 65536; j++){
+           printf("%dバイト目データ：%d\n",j, read_buf[j]);
+        }
     }
     uint64_t end_time = time_us_64();
     uint64_t total_elapsed_time = end_time - start_time;
@@ -834,6 +839,14 @@ void AT25SF_read_jedec_id(uint8_t id[3]) {
     gpio_put(AT25SF_PIN_CS, 1);
     printf("%02X %02X %02X\n", id[0], id[1], id[2]);
 }
+static volatile uint32_t log_count = 0;
+// 1. タイマー割り込みで呼ばれるコールバック関数
+bool timer_1ms_callback(struct repeating_timer *t) {
+    log_put(); // 1msごとにログ詰め込みを実行
+    log_count++;
+    return log_count < 1024;   // 1024件 = ちょうど64ページで止まる
+}
+
 
 void AT25SF_init(void); 
 //この名前だと最初の初期化処理もするみたいに見えるな
@@ -870,10 +883,16 @@ int main()
     initBeep();
     AT25SF_init();
 
+    struct repeating_timer timer;
+    // -1ms を指定して、きっかり1ms周期で割り込みを開始する
+    add_repeating_timer_ms(-1, timer_1ms_callback, NULL, &timer);
+
     while (true) { 
         AT25SF_erase_all();
-        if(get_tactSW0){
-            AT25SF_read(0x00, &read_buf, 65536);
+        printf("SW0: %d\n", get_tactSW0());
+        printf("SW2: %d\n", get_tactSW2());
+        if(!get_tactSW0()){
+            AT25SF_read(0x00000000, read_buf, 65536);
         }      
         flash_task();
         sleep_us(1);
