@@ -17,7 +17,7 @@
 #include "hardware/spi.h"
 #include "hardware/sync.h"
 #include "buzzer/buzzer.h"
-#include "pico_led_sw.h"
+#include "pico_led_sw/pico_led_sw.h"
 
 // ========= AT25SF321B(ﾌﾗｯｼｭﾒﾓﾘ)配線表（ピン割り当て表）=====================
 // -－ピン割り当て表
@@ -177,13 +177,13 @@ typedef struct log_data
     int16_t target_angular_velocity;
     int16_t now_angular_velocity;
     uint16_t vcc_mv;
-}sensors_data_t; //計16byte
+}Sensors_data_t; //計16byte
 
 
 
 #if AT25SF_DEBUG==1
 // ダミーデータを設定。
-volatile sensors_data_t now_sensors_data 
+volatile Sensors_data_t now_sensors_data 
 = {
     .sensor_displacement = 0x0F,
     .sensor_binary = 0xF0,
@@ -192,12 +192,12 @@ volatile sensors_data_t now_sensors_data
     .right_speed = 0xFF00,
     .left_motor_duty = 0x0F,
     .right_motor_duty = -16, //int8_t なので 0xFF=256は範囲外。負の値でシフト動作確認。
-    .target_angular_velocity = -256,　//int16_tなので0xFF00では範囲外
+    .target_angular_velocity = -256, //int16_tなので0xFF00では範囲外
     .now_angular_velocity = 0x00FF,
     .vcc_mv = 0X0FF0
 };
 #else
-volatile sensors_data_t now_sensors_data = {0};
+volatile Sensors_data_t now_sensors_data = {0};
 #endif
 
 #if 0 //RP2350は内蔵SRAM 520KB のため、こんな変数は使えない。
@@ -428,7 +428,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //     if(read_status_is_busy()){
 //         return;
 //     }else{
-//         size_t max = sizeof(sensors_data_t)/sizeof(uint8_t);
+//         size_t max = sizeof(Sensors_data_t)/sizeof(uint8_t);
 //         uint8_t tx_buf[max + 4];
 //         tx_buf[0] = opecode;
 //         tx_buf[1] = (memory_address >> 16) & 0xFF;
@@ -459,7 +459,7 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //         // 1MHzで20バイト送ると約160µsかかる（8μs*20）。
 //         // 1msの制御周期のうち、16%をSPIの待ちで使ってしまう。
 //         // ➡フラッシュへの記録SPI通信で割込みを行うのは難しい。
-//         memory_address += sizeof(sensors_data_t); 
+//         memory_address += sizeof(Sensors_data_t); 
 //         // 10進数の「16」は16進数で 0x10 なので、
 //         // 毎回下から2桁目が +1 される（0x00 ➔ 0x10 ➔ 0x20 ➔ ...0xF0）。
 //         // 16回目で桁上がりして、0x100になって下位2ビットが0x00に戻る。
@@ -477,31 +477,59 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //     }
 // }
 
-static uint now_fill = 0; //割り込みが今詰めているバッファの番号（0か1）
-static int ready_buf = -1; //書き込みを待っているバッファの番号。無ければ -1
+typedef enum{
+    NOT_READEY = -1,
+    BUF_A = 0,
+    BUF_B =1
+} Write_enable_buf;
+Write_enable_buf buf_ready_status = NOT_READEY;
+//書き込みを待っているバッファの番号。無ければ -1
+// ➡bufの状態がわかりやすい様にenum作ったのにうまく使えていないな、、、。
 static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、このページは捨てる
-static uint32_t total_bytes = 0; //バッファの中で、次に詰める位置（0〜255）
-static uint16_t n_bytes = 0;
-static uint8_t n_pages = 0;
-void pack_log16b_into_pagebuf(uint8_t *buf);
-void pack_log16b_into_pagebuf(uint8_t *buf)
+static uint32_t total_bytes = 0; 
+static uint16_t nth_byte = 0; //バッファの中で、次に詰める位置（0〜255）
+static uint8_t now_filling = 0; 
+//割り込みが今詰めているバッファの番号（0か1）
+void log_pack(uint8_t *dst, const volatile Sensors_data_t *src);
+void log_pack(uint8_t *dst, const volatile Sensors_data_t *src)
+// ↑log_page_buf[0~1].bytes[n]どちらのページのどの位置かまで指定して渡す。
+// コピーするデータもセンサーデータ構造体が前のデータ用など増えた時に備えて、
+// ポインタ汎用的な *src で受け取り、アロー演算子でアクセスする。
+// ◆引数についてメモ
+// C言語では dst[i]と書いた瞬間にポインタではなく実体と解釈される。
+// 内部で、ポインタ[番号] ⇒*(ポインタ + 番号) に変換される。
+// dst：配列の先頭アドレス＝ポインタ
+// dst+1：次の配列要素のアドレス＝ポインタ
+// *(dst + 1)：間接参照*＝その場所にあるデータ実体そのもの。
+// それを「別の変数に代入したとき」や「ポインタではない関数の引数に渡したとき」
+// コピーが作られる。
+// ●引数への値渡しとポインタ渡しについて
+// 「.」を使うと実体のコピーが渡され元データ壊れない為安全。
+// しかし毎回256Byteのコピーが発生して処理が重くなる。
+// 「*」で渡し、「->」で扱う場合はデータの住所(4~8byte程度)のため一瞬で渡せる。
+// srcの修飾子について。
+// now_sensors_data には「割り込み等で勝手に書き換わる可能性がある
+// （volatile）」という目印がついているのに、関数の引数 Sensors_data_t *src
+//  に渡すときにその目印を書かないとコンパイルエラーになる。
 {
-    log_page_buf[n_pages].bytes[n_bytes] = now_sensors_data.sensor_displacement;
-    log_page_buf[n_pages].bytes[n_bytes+1] = now_sensors_data.sensor_binary;
-    log_page_buf[n_pages].bytes[n_bytes+2] = (now_sensors_data.target_speed >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+3] = now_sensors_data.target_speed & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+4] = (now_sensors_data.left_speed >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+5] = now_sensors_data.left_speed & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+6] = (now_sensors_data.right_speed >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+7] = now_sensors_data.right_speed & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+8] = now_sensors_data.left_motor_duty;
-    log_page_buf[n_pages].bytes[n_bytes+9] = now_sensors_data.right_motor_duty;
-    log_page_buf[n_pages].bytes[n_bytes+10] = ((uint16_t)now_sensors_data.target_angular_velocity >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+11] = now_sensors_data.target_angular_velocity & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+12] = ((uint16_t)now_sensors_data.now_angular_velocity >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+13] = now_sensors_data.now_angular_velocity & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+14] = (now_sensors_data.vcc_mv >> 8) & 0xFF;
-    log_page_buf[n_pages].bytes[n_bytes+15] = now_sensors_data.vcc_mv & 0xFF;
+    dst[nth_byte] = src->sensor_displacement;
+    dst[nth_byte+1] = src->sensor_binary;
+    dst[nth_byte+2] = (src->target_speed >> 8) & 0xFF;
+    dst[nth_byte+3] = src->target_speed & 0xFF;
+    dst[nth_byte+4] = (src->left_speed >> 8) & 0xFF;
+    dst[nth_byte+5] = src->left_speed & 0xFF;
+    dst[nth_byte+6] = (src->right_speed >> 8) & 0xFF;
+    dst[nth_byte+7] = src->right_speed & 0xFF;
+    dst[nth_byte+8] = src->left_motor_duty;
+    dst[nth_byte+9] = src->right_motor_duty;
+    dst[nth_byte+10] = ((uint16_t)src->target_angular_velocity >> 8) & 0xFF;
+    dst[nth_byte+11] = src->target_angular_velocity & 0xFF;
+    dst[nth_byte+12] = ((uint16_t)src->now_angular_velocity >> 8) & 0xFF;
+    dst[nth_byte+13] = src->now_angular_velocity & 0xFF;
+    dst[nth_byte+14] = (src->vcc_mv >> 8) & 0xFF;
+    dst[nth_byte+15] = src->vcc_mv & 0xFF;
+
+    total_bytes += 16;
     // ◆いや、forで回すのでなくて、割り込みで呼ばれることを想定して、
     // 配列の指定を、%16,%256などを使って、staticかグローバルにして管理して、
     // 値の格納処理後に、カウントを進める書き方に変える必要があるかな。
@@ -510,29 +538,38 @@ void pack_log16b_into_pagebuf(uint8_t *buf)
     // 理想だな。
 }
 
-void put_log_into_pagebuf(void);
-void put_log_into_pagebuf(void)
+// ↓バッファに詰め込む係（割り込み）の中で呼ばれる。
+// それとは別に、AT25SFに書き込む係(main内で実行※重いSPI通信使う為)も作る。
+void log_put(void);
+void log_put(void)
 {   
-    n_pages = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
-    n_bytes = total_bytes % 256; //16%256=16,32%256=32...256%256=0
-    // if (n_bytes >= 256){
-    //     n_pages = n_pages ^ 1;
+    now_filling = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
+    nth_byte = total_bytes % 256; //16%256=16,32%256=32...256%256=0
+    // if (nth_byte >= 256){
+    //     now_filling = now_filling ^ 1;
     // } ifを使った方が分かりやすいかもしれない、、、。
+    log_pack(
+        &log_page_buf[now_filling].bytes[nth_byte], &now_sensors_data);
+    // ↑16byte詰める関数を呼び出しbufに詰める。
 
-    total_bytes += 16;
-
-    // if(n_bytes >= 256) start_write_AT25SF();
+    // if(nth_byte >= 256) start_write_AT25SF();
     // みたいに256になったら書込み処理をスタートさせたい。
     if(total_bytes % 256 == 0){ //一ページ溜まった瞬間。
-        if(ready){
-            total_bytes -= 256; //今のページを捨てて同じページに最初から
+        if(buf_ready_status >= 0){ //-1になっていない＝前のページ書込み未完了。
+            pack_dropped++; //詰め込みあふれを数え。このページは捨てる。
+            // total_bytes -= 256; //今のページを捨てて同じページに最初から
+            // -256しなくても、バフを切り替えなければ、そのまま上書きされる？
+        }else{
+            buf_ready_status = now_filling; //
+            now_filling ^= now_filling;
+
         }
     }
 }
 
 // 256byte=1pageをまとめて書き込む関数。
-void AT25SF_write_1page(void);
-void AT25SF_write_1page(void)
+void log_write_1page(void);
+void log_write_1page(void)
 {
     if(read_status_is_busy()){
         return;
@@ -551,7 +588,7 @@ void AT25SF_write_1page(void)
         tx[3] = memory_address;
         uint32_t ints = save_and_disable_interrupts();
         memcpy(
-            &tx[4], log_page_buf[!n_pages].bytes, 256);
+            &tx[4], log_page_buf[!now_filling].bytes, 256);
         restore_interrupts(ints);
         // void *memcpy
         // (void *__restrict__, const void *__restrict__, size_t)
@@ -572,6 +609,8 @@ void AT25SF_write_1page(void)
 // ➡毎回電源起動時の初期化で呼んでしまうと、ログのデータを読み出そうと電源
 // を入れた時にログが消えてしまう。
 // ➡SW２を押した時に実行する様に変更。
+bool erase_completed_flag = false;
+// 全消去完了管理フラグ。※書き込む前に全消去する必要がある。
 void AT25SF_erase_all(void);
 void AT25SF_erase_all(void){
  if(get_tactSW2())
@@ -588,6 +627,7 @@ void AT25SF_erase_all(void){
     {
         sleep_ms(1000);
     }
+    erase_completed_flag = true;
     for(int i=0; i <1000; i++)
     {
         beepProcess();
@@ -628,7 +668,7 @@ void AT25SF_init(void) {
     gpio_set_dir(AT25SF_PIN_CS, GPIO_OUT);
     gpio_put(AT25SF_PIN_CS, 1);
 }
-void AT25_hardware_setup(vodi)
+void AT25_hardware_setup(void)
 {
   gpio_set_function(10, GPIO_FUNC_SIO);
   gpio_set_function(13, GPIO_FUNC_SIO);
@@ -637,19 +677,6 @@ void AT25_hardware_setup(vodi)
   gpio_set_dir(13, GPIO_IN);
   // SWに接続されているGPIOのpull up抵抗をONに。
   gpio_pull_up(13);
-}
-/*led2を点滅*/
-void out_led2(bool on)
-{
-    gpio_put(10, on);
-}
-// SWの状態を読取る関数
-bool get_tactSW2(void)
-{
-    return !gpio_get(13);
-    // ボード上のSWは押すとLow、通常時Highなので、
-    // 直感的に押されたとき「１」になるように、
-    // 「!」で論理反転をする。
 }
 
 int main()
@@ -660,7 +687,12 @@ int main()
     AT25SF_init();
 
     while (true) {
-        AT25SF_erase_all();
+        if(erase_completed_flag){
+            if (buf_ready_status >= 0) {
+                log_write_1page(); // WREN → 02h+アドレス+256B → BUSY待ち
+                buf_ready_status = -1;        // 書き終わったと知らせる
+            }  
+        }
         uint8_t id[3] = {0};
         AT25SF_read_jedec_id(id);
         sleep_ms(1000);

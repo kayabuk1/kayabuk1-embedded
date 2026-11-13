@@ -22,6 +22,10 @@ uint16_t mcp3208or3008_read(uint8_t channel) {
     if (channel >= MCP3208or3008_CH_NUM) channel = 0;
     uint8_t tx_buf[3] = {0b00000110 | ((channel & 0x04)>>2), (channel & 0x03) << 6, 0x00};
     uint8_t rx_buf[3] = {0};
+    spi_set_format(
+        MCP3208or3008_SPI_PORT, 8, SPI_CPOL_0
+        , SPI_CPHA_0, SPI_MSB_FIRST);
+    // SPI0ポートをジャイロセンサーと共有しつ使用し、ジャイロセンサーは
     gpio_put(MCP3208or3008_PIN_CS, 0);
     spi_write_read_blocking
     (MCP3208or3008_SPI_PORT, tx_buf, rx_buf, 3);
