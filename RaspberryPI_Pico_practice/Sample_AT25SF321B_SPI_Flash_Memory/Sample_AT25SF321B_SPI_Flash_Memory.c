@@ -19,6 +19,8 @@
 #include "buzzer/buzzer.h"
 #include "pico_led_sw/pico_led_sw.h"
 
+#include "pico/rand.h"
+
 // ========= AT25SF321B(ﾌﾗｯｼｭﾒﾓﾘ)配線表（ピン割り当て表）=====================
 // -－ピン割り当て表
 // *　１｜!CS(ﾁｯﾌﾟｾﾚｸﾄ) ⇒ GPIO3 ※本番GPIO13
@@ -179,8 +181,6 @@ typedef struct log_data
     uint16_t vcc_mv;
 }Sensors_data_t; //計16byte
 
-
-
 #if AT25SF_DEBUG==1
 // ダミーデータを設定。
 volatile Sensors_data_t now_sensors_data 
@@ -196,9 +196,41 @@ volatile Sensors_data_t now_sensors_data
     .now_angular_velocity = 0x00FF,
     .vcc_mv = 0X0FF0
 };
+void pack_random_sensordata();
+void pack_random_sensordata(){
+    now_sensors_data.sensor_displacement 
+    = (uint8_t)get_rand_32();
+    now_sensors_data.sensor_binary 
+    = (uint8_t)get_rand_32();
+    now_sensors_data.target_speed 
+    = (uint16_t)get_rand_32();
+    now_sensors_data.left_speed 
+    =  (uint16_t)get_rand_32();
+    now_sensors_data.right_speed 
+    = (uint16_t)get_rand_32();
+    now_sensors_data.left_motor_duty 
+    = (int8_t)get_rand_32();
+    now_sensors_data.right_motor_duty 
+    = (int8_t)get_rand_32(); 
+    //int8_t なので 0xFF=256は範囲外。負の値でシフト動作確認。
+    now_sensors_data.target_angular_velocity 
+    = (int16_t)get_rand_32(); 
+    //int16_tなので0xFF00では範囲外
+    now_sensors_data.now_angular_velocity 
+    = (int16_t)get_rand_32();
+    now_sensors_data.vcc_mv = (uint16_t)get_rand_32();
+}
 #else
 volatile Sensors_data_t now_sensors_data = {0};
 #endif
+
+typedef struct {
+    uint64_t chip_erase_time;
+    uint32_t write_1page_time[1024];
+    uint16_t write_count;
+    uint64_t read_time;
+}mesurement_time_t;
+mesurement_time_t mesurement_time = {0};
 
 #if 0 //RP2350は内蔵SRAM 520KB のため、こんな変数は使えない。
 // データ構造把握用
@@ -261,6 +293,8 @@ uint8_t read_status_register_1(void)
     return rx[1];
 }
 
+typedef enum {FLASH_BUSY, FLASH_READY} flash_state_t;
+flash_state_t flash_state = FLASH_BUSY;
 bool read_status_is_busy(void);
 /**
  * @brief ステータスレジスタ1を読み出す関数
@@ -279,6 +313,7 @@ bool read_status_is_busy(void)
     // SPIはリングバッファなので、受信するには同じサイズのデータを送っている。
     AT25SF_cs_high();
     bool status = rx[1] & 0x01;
+    flash_state = status;
     // なので opecode 送信時にもダミーデータ8bitを受信している。
     // なので、ステータスレジスタが入っているのはrx[1]。
     return status;
@@ -477,15 +512,31 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
 //     }
 // }
 
+/*◆変数についてのメモ
+変数ごとに「誰が書き、誰が読むか」を決める。
+割り込みとmainが関わるコードでは、変数ごとにこれを決めておくと、
+迷わなくなる。
+　　　　　　　　　　　　　　　　変数	意味	書く人	読む人
+total_bytes、now_filling、nth_byte｜割り込みが今どこに詰めているか｜割り込み｜割り込み
+buf_state｜どの箱が運ばれる待ちか（札）｜割り込み（付ける）,main（外す）｜両方
+memory_address	フラッシュの次の書き込み先	main	main
+pack_dropped	あふれた回数	割り込み	main（表示）
+
+mainは now_filling を読む必要がない。
+mainが知りたいのは「どの箱を運ぶか」なので、buf_state だけを見れば足りる。
+両方から触る変数は、buf_state と pack_dropped 。
+この2つに volatile を付ける。
+*/
+
 typedef enum{
-    NOT_READEY = -1,
+    NOT_READY = -1,
     BUF_A = 0,
     BUF_B =1
-} Write_enable_buf;
-Write_enable_buf buf_ready_status = NOT_READEY;
+} buf_state_t;
+volatile buf_state_t buf_state = NOT_READY;
 //書き込みを待っているバッファの番号。無ければ -1
 // ➡bufの状態がわかりやすい様にenum作ったのにうまく使えていないな、、、。
-static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、このページは捨てる
+volatile static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、このページは捨てる
 static uint32_t total_bytes = 0; 
 static uint16_t nth_byte = 0; //バッファの中で、次に詰める位置（0〜255）
 static uint8_t now_filling = 0; 
@@ -511,25 +562,38 @@ void log_pack(uint8_t *dst, const volatile Sensors_data_t *src)
 // now_sensors_data には「割り込み等で勝手に書き換わる可能性がある
 // （volatile）」という目印がついているのに、関数の引数 Sensors_data_t *src
 //  に渡すときにその目印を書かないとコンパイルエラーになる。
-{
-    dst[nth_byte] = src->sensor_displacement;
-    dst[nth_byte+1] = src->sensor_binary;
-    dst[nth_byte+2] = (src->target_speed >> 8) & 0xFF;
-    dst[nth_byte+3] = src->target_speed & 0xFF;
-    dst[nth_byte+4] = (src->left_speed >> 8) & 0xFF;
-    dst[nth_byte+5] = src->left_speed & 0xFF;
-    dst[nth_byte+6] = (src->right_speed >> 8) & 0xFF;
-    dst[nth_byte+7] = src->right_speed & 0xFF;
-    dst[nth_byte+8] = src->left_motor_duty;
-    dst[nth_byte+9] = src->right_motor_duty;
-    dst[nth_byte+10] = ((uint16_t)src->target_angular_velocity >> 8) & 0xFF;
-    dst[nth_byte+11] = src->target_angular_velocity & 0xFF;
-    dst[nth_byte+12] = ((uint16_t)src->now_angular_velocity >> 8) & 0xFF;
-    dst[nth_byte+13] = src->now_angular_velocity & 0xFF;
-    dst[nth_byte+14] = (src->vcc_mv >> 8) & 0xFF;
-    dst[nth_byte+15] = src->vcc_mv & 0xFF;
+{   
+    uint32_t ints = save_and_disable_interrupts();
+    dst[0] = src->sensor_displacement;
+    dst[1] = src->sensor_binary;
+    dst[2] = (src->target_speed >> 8) & 0xFF;
+    dst[3] = src->target_speed & 0xFF;
+    dst[4] = (src->left_speed >> 8) & 0xFF;
+    dst[5] = src->left_speed & 0xFF;
+    dst[6] = (src->right_speed >> 8) & 0xFF;
+    dst[7] = src->right_speed & 0xFF;
+    dst[8] = src->left_motor_duty;
+    dst[9] = src->right_motor_duty;
+    dst[10] = ((uint16_t)src->target_angular_velocity >> 8) & 0xFF;
+    dst[11] = src->target_angular_velocity & 0xFF;
+    dst[12] = ((uint16_t)src->now_angular_velocity >> 8) & 0xFF;
+    dst[13] = src->now_angular_velocity & 0xFF;
+    dst[14] = (src->vcc_mv >> 8) & 0xFF;
+    dst[15] = src->vcc_mv & 0xFF;
+    restore_interrupts(ints);
 
-    total_bytes += 16;
+    #if AT25SF_DEBUG
+    pack_random_sensordata();
+    #endif
+    // ◆呼び出し側で log_pack(
+    // &log_page_buf[now_filling].bytes[nth_byte], &now_sensors_data);
+    // と、nth_byte 分進めたアドレスを渡しているので、
+    // 位置が二重に足される。128バイト目以降は、配列の外を書き換える
+    // ➡dst[0]~[15]で良い。
+    // ◆思い付きメモ：now_sensors_data のメンバ変数名が異なるので、
+    // ループで回すことが出来ない。ループで回す方法はないだろうか？
+    // ポインタで受け取り、ポインタをインクリメントする？
+  
     // ◆いや、forで回すのでなくて、割り込みで呼ばれることを想定して、
     // 配列の指定を、%16,%256などを使って、staticかグローバルにして管理して、
     // 値の格納処理後に、カウントを進める書き方に変える必要があるかな。
@@ -543,7 +607,7 @@ void log_pack(uint8_t *dst, const volatile Sensors_data_t *src)
 void log_put(void);
 void log_put(void)
 {   
-    now_filling = (total_bytes / 256) % 2;     //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
+    now_filling = (total_bytes / 256) % 2; //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
     nth_byte = total_bytes % 256; //16%256=16,32%256=32...256%256=0
     // if (nth_byte >= 256){
     //     now_filling = now_filling ^ 1;
@@ -551,29 +615,58 @@ void log_put(void)
     log_pack(
         &log_page_buf[now_filling].bytes[nth_byte], &now_sensors_data);
     // ↑16byte詰める関数を呼び出しbufに詰める。
-
-    // if(nth_byte >= 256) start_write_AT25SF();
+    total_bytes += 16;
+    // ↑log_pack()は詰めるだけに徹して、total_byte加算はより大きい役割の
+    // log_put()内に記述。
+    // ●メモ：if(nth_byte >= 256) start_write_AT25SF();
     // みたいに256になったら書込み処理をスタートさせたい。
     if(total_bytes % 256 == 0){ //一ページ溜まった瞬間。
-        if(buf_ready_status >= 0){ //-1になっていない＝前のページ書込み未完了。
+        if(buf_state >= 0){ //-1になっていない＝前のページ書込み未完了。
             pack_dropped++; //詰め込みあふれを数え。このページは捨てる。
-            // total_bytes -= 256; //今のページを捨てて同じページに最初から
+            total_bytes -= 256; //今のページを捨てて同じページに最初から
             // -256しなくても、バフを切り替えなければ、そのまま上書きされる？
+            // ➡次の呼び出しの先頭でnow_filling = (total_bytes / 256) % 2;
+            //16/256=0%2=0,256/256=1%2=1,
+            // が計算され、now_fillingが切り替わってしまうので －256は必須。
         }else{
-            buf_ready_status = now_filling; //
-            now_filling ^= now_filling;
+            switch (now_filling)
+            {
+            case BUF_A:
+            buf_state = BUF_B;
+                break;
+            
+            case BUF_B:
+            buf_state = BUF_A;
+                break;
+            }
+            // buf_state = now_filling;
+            // ➡折角enum定義を書いたので、switch文に変えて可読性高くした。
+            // now_filling ^= 1;
+            // ➡自身との排他的論理和は毎回1になるので間違い。
+            // Bが満杯になったとき：1 ^ 1 = 0 
+            // → !now_filling は1（B）→ たまたま正しい
+            // Aが満杯になったとき：0 ^ 0 = 0 
+            // → !now_filling は1（B）→ 間違い
+            // つまり、半分のページは偶然うまくいき、
+            // 残り半分は間違ったページを書く。
+            // ^= 1 にすれば両方正しくなるが、
+            // 次の呼び出しの先頭で now_filling は計算し直されるので、
+            // この行はそもそも要らなかった。➡消去。
 
         }
     }
 }
 
 // 256byte=1pageをまとめて書き込む関数。
-void log_write_1page(void);
-void log_write_1page(void)
+bool log_write_1page(uint8_t page);
+bool log_write_1page(uint8_t page) //page:0ならA、1ならB
 {
     if(read_status_is_busy()){
-        return;
+        // 呼び出しもとですでに判定しているので不要？
+        return false;
     }else{
+        
+            uint32_t start_time = time_us_32();
         // uint16_t max = (sizeof(Page_256B_t)/2) + 4;
         // uint8_t tx[max] = {0};
         // ⚠↑の書き方は間違い。配列の要素数指定する max が、
@@ -581,26 +674,41 @@ void log_write_1page(void)
         // になっているためサイズがコンパイル時に分からないため、
         // ={0};で一括に初期化できない。
         uint8_t tx[TX_SIZE_WRITE_PAGE] = {0};
+        uint8_t tx_1[4] = {0};
         uint8_t opecode = AT25SF_PAGE_PROGRAM;
         tx[0] = opecode;
         tx[1] = (memory_address >> 16) & 0xFF;
         tx[2] = (memory_address >> 8) & 0xFF;
         tx[3] = memory_address;
-        uint32_t ints = save_and_disable_interrupts();
         memcpy(
-            &tx[4], log_page_buf[!now_filling].bytes, 256);
-        restore_interrupts(ints);
+            &tx[4], log_page_buf[page].bytes, 256);
         // void *memcpy
         // (void *__restrict__, const void *__restrict__, size_t)
         // コピー先のメモリ領域のポインタ, コピー元のメモリ領域のポインタ, コピーするサイズ（バイト数）
         // memcpy（メモリ・コピー）
         // あるメモリ領域の内容を別のメモリ領域へ高速にコピーするための
         // 標準ライブラリ関数。
+        // ◆修正点：log_write_1page が !now_filling のページを書く
+        // ページがたまった直後は、次の割り込みまで最大1ms、
+        // now_filling がまだ詰め終えたページを指している。
+        // そのため !now_filling は古い方のページになる。
+        // ※mainループは数μsごとに回る。
         AT25SF_write_enable();
         AT25SF_cs_low();
         spi_write_blocking(AT25SF_SPI_PORT, tx, TX_SIZE_WRITE_PAGE);
         AT25SF_cs_high();
-        memory_address += 256; 
+        memory_address += 256;
+
+        uint32_t end_time = time_us_32();
+        uint32_t elapsed_time = end_time - start_time;
+        mesurement_time.write_1page_time[mesurement_time.write_count]
+        = elapsed_time;
+        mesurement_time.write_count++;
+        #if AT25SF_DEBUG
+        printf("1page書込み時間：%lu μs\n", elapsed_time);
+        #endif
+
+        return true;
     }
 }
 
@@ -614,7 +722,8 @@ bool erase_completed_flag = false;
 void AT25SF_erase_all(void);
 void AT25SF_erase_all(void){
  if(get_tactSW2())
- {
+ {  
+    uint64_t start_time = time_us_64();
     uint8_t tx = AT25SF_CHIP_ERASE_ALL;
     AT25SF_write_enable();
     AT25SF_cs_low();
@@ -627,6 +736,13 @@ void AT25SF_erase_all(void){
     {
         sleep_ms(1000);
     }
+    uint64_t end_time = time_us_64();
+    uint64_t elapsed_time = end_time - start_time;
+    mesurement_time.chip_erase_time = elapsed_time;
+    #if AT25SF_DEBUG
+    printf("全消去書込み時間：%llu μs\n", elapsed_time);
+    #endif
+
     erase_completed_flag = true;
     for(int i=0; i <1000; i++)
     {
@@ -641,6 +757,74 @@ void AT25SF_erase_all(void){
  }
 }
 
+void flash_task(void)   // mainループで毎回呼ぶ。すぐに戻る
+{   
+    if(erase_completed_flag){
+        switch (flash_state) {
+        case FLASH_READY:
+            if ( buf_state >= 0) {
+                if(log_write_1page(buf_state)){
+                    // ↑中でlog_write_1page();を呼べ構造にしたらよいかな。
+                    // それともそのままlog_write_1page()を実行するのは、
+                    // (データ運送係)は main にさせた方が良い？
+                    // WREN → 02h+アドレス+256B（送るだけで待たない）
+                    // log_write_1page()内最後で+256しているが、どちらで
+                    // アドレスを加算するのが良いのだろうか？
+                    // ➡log_write_1pageの中だけにすることに。
+                    buf_state = NOT_READY;
+                    flash_state = FLASH_BUSY;
+                }
+            }
+            break;
+        case FLASH_BUSY:
+            if (!read_status_is_busy()) {   // 1回確かめるだけ
+                flash_state = FLASH_READY;
+            }
+            break;
+        }
+    }
+}
+
+AT25SF_read(uint32_t addr, uint8_t *buf, size_t len);
+// #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
+// #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
+static uint8_t read_buf[65536] = {0};
+// 関数の内側（ローカル変数）で uint8_t tx[65536] と rx[65536] を取ると、合計約131KBのスタックを消費します。Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こします（一般知識）。
+// 
+AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
+{
+    uint64_t start_time = time_us_64();
+    uint8_t opecode = AT25SF_NORMAL_READ;
+    uint32_t read_address = 0x00000000; //0000_0000h~3FFFFFh
+    uint8_t tx[4] = {0};
+
+    
+    for(uint8_t i = 0; i < 64 ; i++){
+        tx[0] = opecode;
+        tx[1] = (read_address >> 16) & 0xFF;
+        tx[2] = (read_address >> 8) & 0xFF;
+        tx[3] = read_address;
+        AT25SF_cs_low();
+        uint32_t start_read_block_time = time_us_32();
+        spi_write_blocking(AT25SF_SPI_PORT, tx, 4);
+        spi_read_blocking(AT25SF_SPI_PORT, 0x00, read_buf, len);
+        AT25SF_cs_high();
+        read_address += 0x10000;
+        uint32_t end_read_block_time = time_us_32();
+        uint32_t elapsed_time = 
+        end_read_block_time - start_read_block_time;
+        printf("64kB[%d]読み出しタイム：%lu μs\n", i, elapsed_time);
+        // for (uint32_t j = 0; j < 65536; j++){
+        //    printf("%dバイト目データ：%d\n",j, read_buf[j]);
+        // }
+    }
+    uint64_t end_time = time_us_64();
+    uint64_t total_elapsed_time = end_time - start_time;
+    mesurement_time.read_time = total_elapsed_time;
+    #if AT25SF_DEBUG
+    printf("全読み込み時間：%llu μs\n", total_elapsed_time);
+    #endif
+}
 
 void AT25SF_read_jedec_id(uint8_t id[3]) {
     uint8_t opecode = JEDEC_ID_READ;
@@ -686,15 +870,12 @@ int main()
     initBeep();
     AT25SF_init();
 
-    while (true) {
-        if(erase_completed_flag){
-            if (buf_ready_status >= 0) {
-                log_write_1page(); // WREN → 02h+アドレス+256B → BUSY待ち
-                buf_ready_status = -1;        // 書き終わったと知らせる
-            }  
-        }
-        uint8_t id[3] = {0};
-        AT25SF_read_jedec_id(id);
-        sleep_ms(1000);
+    while (true) { 
+        AT25SF_erase_all();
+        if(get_tactSW0){
+            AT25SF_read(0x00, &read_buf, 65536);
+        }      
+        flash_task();
+        sleep_us(1);
     }
 }

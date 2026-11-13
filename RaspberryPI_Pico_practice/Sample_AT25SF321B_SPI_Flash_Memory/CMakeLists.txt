@@ -55,6 +55,7 @@ target_link_libraries(Sample_AT25SF321B_SPI_Flash_Memory
         hardware_spi
         hardware_pwm
         hardware_clocks
+        pico_rand
         )
 
 # Add the standard include files to the build
