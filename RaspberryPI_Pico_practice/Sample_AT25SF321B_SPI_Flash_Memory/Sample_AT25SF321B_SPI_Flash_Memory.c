@@ -791,18 +791,31 @@ void flash_task(void)   // mainループで毎回呼ぶ。すぐに戻る
     }
 }
 
+// ➡20261115 read関数が純粋なreadになっていないので、
+// 読み出し処理とPCに転送処理に分離したい。
 void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len);
+void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
+{
+    uint8_t opecode = AT25SF_NORMAL_READ;
+    uint32_t read_address = addr; //0000_0000h~3FFFFFh
+    uint8_t tx[4] = {0};
+    tx[0] = opecode;
+    tx[1] = (read_address >> 16) & 0xFF;
+    tx[2] = (read_address >> 8) & 0xFF;
+    tx[3] = read_address;
+    AT25SF_cs_low();
+    spi_write_blocking(AT25SF_SPI_PORT, tx, 4);
+    spi_read_blocking(AT25SF_SPI_PORT, 0x00, buf, len);
+    AT25SF_cs_high();
+}
 // #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
 // #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
 static uint8_t read_buf[65536] = {0};
 // 関数の内側（ローカル変数）で uint8_t tx[65536] と rx[65536] を取ると、合計約131KBのスタックを消費します。Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こします（一般知識）。
 // 
-void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
+void dump_log_to_pc(uint32_t addr, uint8_t *buf, size_t len)
 { 
     uint64_t start_time = time_us_64();
-    uint8_t opecode = AT25SF_NORMAL_READ;
-    uint32_t read_address = addr; //0000_0000h~3FFFFFh
-    uint8_t tx[4] = {0};
 
     // ➡⚠Picoは独立したマイコンであるため、標準のfopen関数などを使っても
     // PC側のストレージ（Cドライブなど）にはアクセスできない仕組みになっています。
@@ -847,15 +860,9 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     }
  
     for(uint8_t i = 0; i < 64 ; i++){
-        tx[0] = opecode;
-        tx[1] = (read_address >> 16) & 0xFF;
-        tx[2] = (read_address >> 8) & 0xFF;
-        tx[3] = read_address;
-        AT25SF_cs_low();
+
         uint32_t start_read_block_time = time_us_32();
-        spi_write_blocking(AT25SF_SPI_PORT, tx, 4);
-        spi_read_blocking(AT25SF_SPI_PORT, 0x00, buf, len);
-        AT25SF_cs_high();
+
         read_address += 0x10000;
         uint32_t end_read_block_time = time_us_32();
         uint32_t elapsed_time = 
