@@ -18,6 +18,7 @@
 #include "hardware/sync.h"
 #include "buzzer/buzzer.h"
 #include "pico_led_sw/pico_led_sw.h"
+#include <time.h>
 
 #include "pico/rand.h"
 
@@ -797,12 +798,24 @@ static uint8_t read_buf[65536] = {0};
 // 関数の内側（ローカル変数）で uint8_t tx[65536] と rx[65536] を取ると、合計約131KBのスタックを消費します。Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こします（一般知識）。
 // 
 void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
-{
+{ 
     uint64_t start_time = time_us_64();
     uint8_t opecode = AT25SF_NORMAL_READ;
     uint32_t read_address = addr; //0000_0000h~3FFFFFh
     uint8_t tx[4] = {0};
 
+    char filename[64];
+    char time_str[32];
+    time_t now;
+    struct tm *local_time;
+    time(&now); //time_t型の変数を引数として渡すと、
+    // 現在のUNIX時間(UTC)を変数に格納してくれる。
+    local_time = localtime(&now);
+    //戻り値はtm型構造体へのポインタ。
+    // この構造体の中に年・月・日・時・分・秒が分解されて格納。
+    strftime(time_str, sizeof(time_str),
+     "%Y%m%d_%H%M%S", tm);
+    // strftime：
     
     for(uint8_t i = 0; i < 64 ; i++){
         tx[0] = opecode;
