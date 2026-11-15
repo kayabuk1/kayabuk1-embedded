@@ -831,13 +831,19 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     #endif
 }
 
-void AT25SF_read_jedec_id(uint8_t id[3]) {
+bool AT25SF_read_jedec_id(void) {
+    uint8_t id[3] = {0};
     uint8_t opecode = JEDEC_ID_READ;
     gpio_put(AT25SF_PIN_CS, 0);
     spi_write_blocking(AT25SF_SPI_PORT, &opecode, 1);
     spi_read_blocking(AT25SF_SPI_PORT, 0x00, id, 3);
     gpio_put(AT25SF_PIN_CS, 1);
-    printf("%02X %02X %02X\n", id[0], id[1], id[2]);
+    bool AT25SF_init_status = (id[0]==0x1f && id[1]==0x87 && id[2]==0x01);
+    #if AT25SF_DEBUG
+    printf("%02X %02X %02X：通信成否「%d」\n",
+     id[0], id[1], id[2], AT25SF_init_status);
+    #endif
+    return At25SF_init_status;
 }
 static volatile uint32_t log_count = 0;
 // 1. タイマー割り込みで呼ばれるコールバック関数
