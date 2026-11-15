@@ -810,7 +810,7 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
 }
 // #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
 // #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
-static uint8_t read_buf[65536] = {0};
+static uint8_t read_buf[4096] = {0};
 // 関数の内側（ローカル変数）で uint8_t tx[65536] と 
 // rx[65536] を取ると、合計約131KBのスタックを消費する。
 // Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こす。
@@ -865,11 +865,20 @@ void dump_log_to_pc(uint32_t end_addr)
      return 1;
     }
  
-    for(uint32_t addr = 0x00; addr < end_addr ; addr += sizeof()){
-
+    for(uint32_t addr = 0; addr < end_addr ; addr += sizeof(read_buf))
+    {
         uint32_t start_read_block_time = time_us_32();
 
-        read_address += 0x10000;
+       size_t read_len 
+       = (end_addr - addr < sizeof(read_buf))
+       ?(end_addr -addr):sizeof(read_buf); 
+       AT25Sf_read(addr, read_buf, read_len);
+       // 読み出した生データをそのままUSBシリアルへ出力
+        fwrite(buf, 1, read_len, stdout);
+     }
+       fflush(stdout);
+       printf("\n=== END DUMP ===\n");
+
         uint32_t end_read_block_time = time_us_32();
         uint32_t elapsed_time = 
         end_read_block_time - start_read_block_time;
