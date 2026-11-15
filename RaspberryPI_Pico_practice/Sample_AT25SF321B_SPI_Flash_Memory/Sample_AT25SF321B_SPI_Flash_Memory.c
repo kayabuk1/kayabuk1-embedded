@@ -804,6 +804,9 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     uint32_t read_address = addr; //0000_0000h~3FFFFFh
     uint8_t tx[4] = {0};
 
+    // ➡⚠Picoは独立したマイコンであるため、標準のfopen関数などを使っても
+    // PC側のストレージ（Cドライブなど）にはアクセスできない仕組みになっています。
+    // ➡どう記録するか検討。
     // ◆外部txtファイルに読み出しデータ書き込み処理
     char filename[64];
     char time_str[32];
@@ -836,9 +839,12 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     // • ... : 書式に埋め込む可変長引数
     // • 戻り値 : 収まりきったかどうかに関わらず、
     // 本来出力されるはずだった文字数（終端文字を含まない）
-
     // 4. ファイルを作成・オープン
-    fp = fopen()
+    fp = fopen(filename, "w");
+    if(fp == NULL){
+     perror("logファイルを開けませんでした。");
+     return 1;
+    }
  
     for(uint8_t i = 0; i < 64 ; i++){
         tx[0] = opecode;
@@ -856,8 +862,16 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
         end_read_block_time - start_read_block_time;
         printf("64kB[%d]読み出しタイム：%lu μs\n", i, elapsed_time);
         for (uint32_t j = 0; j < 65536; j++){
-           printf("%dバイト目データ：%d\n",j, read_buf[j]);
+           if (){//👈途中
+            // 655536分も読み書きもprintfは多すぎるので、
+            // 1ページの最初の１バイト目だけ読みだす様に変更したい。
+            printf("%dバイト目データ：%d\n",j, read_buf[j]);
+           }
+           // ファイルへの書き込みは全行行う。
+         　fprint(fp, "%d\n", read_buf[j]);
         }
+        fclose(fp);
+        printf("作成されたファイル名: %s\n", filename);
     }
     uint64_t end_time = time_us_64();
     uint64_t total_elapsed_time = end_time - start_time;
