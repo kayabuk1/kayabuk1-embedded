@@ -877,12 +877,17 @@ void AT25SF_init(void) {
 void AT25_hardware_setup(void)
 {
   gpio_set_function(10, GPIO_FUNC_SIO);
+  gpio_set_function(12, GPIO_FUNC_SIO);
   gpio_set_function(13, GPIO_FUNC_SIO);
+  gpio_set_function(15, GPIO_FUNC_SIO);
   gpio_set_dir(10, GPIO_OUT);
+  gpio_set_dir(12, GPIO_OUT);
  // Picoボード上のSW0の入力を受け付けるための準備
   gpio_set_dir(13, GPIO_IN);
+  gpio_set_dir(15, GPIO_IN);
   // SWに接続されているGPIOのpull up抵抗をONに。
   gpio_pull_up(13);
+  gpio_pull_up(15);
 }
 
 int main()
