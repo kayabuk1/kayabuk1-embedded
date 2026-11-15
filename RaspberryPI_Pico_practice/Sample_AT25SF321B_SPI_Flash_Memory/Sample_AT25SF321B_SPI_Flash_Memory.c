@@ -255,6 +255,28 @@ bool AT25SF_write_timer_start(int64_t intervar_us);
 
 // -----タイマー割込みの中で呼ばれる関数や、その他基本関数
 
+//================ 形ごとの共通関数（内部専用）======================
+/*
+◆コマンドの送り方は、5つの形しかない
+データシートのタイミングチャートを並べると、このICへの命令は、
+どれも次の5つの形のどれかです。
+① [op]                        06h  04h  C7h
+② [op][← 読む …]              05h  9Fh
+③ [op][アドレス×3]            20h  52h  D8h
+④ [op][アドレス×3][書く … →]  02h
+⑤ [op][アドレス×3][← 読む …]  03h
+==========================================
+共通関数	形	今のコードで同じことをしている所
+cmd_only	①	AT25SF_write_enable() の中身、AT25SF_send_opecode()、
+AT25SF_erase_all() でC7hを送っている3行
+cmd_read	②	read_status_register_1()、read_status_is_busy()、
+AT25SF_read_jedec_id()
+cmd_addr	③	まだ無い（セクタ消去とブロック消去で使う）
+cmd_addr_write	④	log_write_1page() の送信部分、AT25SF_write_byte()
+cmd_addr_read	⑤	AT25SF_read() そのもの
+wait_ready	②の繰り返し	AT25SF_erase_all() の中の 
+while (read_status_is_busy()) のループ
+*/
 static inline void AT25SF_cs_low(void);
 static inline void AT25SF_cs_low(void){
     gpio_put(AT25SF_PIN_CS, 0);
@@ -264,13 +286,36 @@ static inline void AT25SF_cs_high(void){
     gpio_put(AT25SF_PIN_CS, 1);
 }
 
+
+static void cmd_only(uint8_t op);                                   
+// 06h, C7h
+static void cmd_read(uint8_t op, uint8_t *buf, size_t len);         
+// 05h, 9Fh
+static void cmd_addr(uint8_t op, uint32_t addr);                    
+// 20h, 52h, D8h
+static void cmd_addr_write(
+uint8_t op, uint32_t addr, const uint8_t *buf, size_t len);  
+// 02h
+static void cmd_addr_read(
+uint8_t op, uint32_t addr, uint8_t *buf, size_t len);         
+// 03h
+static bool wait_ready(uint32_t timeout_us);   
+// BUSYが外れたら true、時間切れなら false
+
+
+static void AT25SF_only_send_opecode(uint8_t opecode);
+static void AT25SF_only_send_opecode(uint8_t opecode)
+{
+        AT25SF_cs_low();    
+        spi_write_blocking(AT25SF_SPI_PORT, &opecode, 1);
+        AT25SF_cs_high();
+}
+
 static inline void AT25SF_write_enable(void);
 static inline void AT25SF_write_enable(void){
     // WEL: WriteEnableLatch
-    uint8_t tx = AT25SF_WRITE_ENABLE;
-    AT25SF_cs_low();
-    spi_write_blocking(AT25SF_SPI_PORT, &tx, 1);
-    AT25SF_cs_high();
+    uint8_t opecode = AT25SF_WRITE_ENABLE;
+    AT25SF_only_send_opecode(opcode);
     // WriteEnaaleコマンド 06hを送信し、書込み許可BIT(WEL)を１に。
     // WELが１になるのは CS が HIGH になった瞬間。
     // この後、データの書き込み処理などが続き、BUSYBITが０になると、
@@ -372,20 +417,6 @@ bool(*polling_timer_callback)(repeating_timer_t *))
 // みたいにして増やしていくのが良いのだろうか？
 // 全送信データは書込みなら40bit
 
-void AT25SF_send_opecode(uint8_t opecode);
-void AT25SF_send_opecode(uint8_t opecode)
-{
-    if(read_status_is_busy())
-    {
-        return;
-    }
-    else
-    {   
-        AT25SF_cs_low();    
-        spi_write_blocking(AT25SF_SPI_PORT, &opecode, 1);
-        AT25SF_cs_high();
-    }
-}
 
 static uint32_t memory_address = 0x00000000; //00000000h~3FFFFFh
 static uint8_t page_count = 0;
@@ -717,8 +748,24 @@ bool log_write_1page(uint8_t page) //page:0ならA、1ならB
         return true;
     }
 }
-
-
+/*
+試験の形：セクタ消去 → 書く → バッファを0で消す → 読み戻す、の順です。
+全消去（10〜30秒）ではなく4KBの消去（標準55ms）を使うので、何度も試せます。
+読み戻す前にバッファを消すのは、RAMに残った値を見てしまわないためです。
+Page Programは1回に256バイトまでなので、4KBは256バイト×16回に分けて書きます。
+*/
+ // 例：4KBのセクタ消去
+bool AT25SF_erase_sector(uint32_t addr)
+{
+    if (!wait_ready(10 * 1000)) return false;              
+ // 前の処理が終わるのを待つ
+    cmd_only(AT25SF_WRITE_ENABLE);
+    cmd_addr(AT25SF_BLOCK_ERASE_4KB, addr);
+    if (!(read_status_register_1() & 0x01)) return false;  
+ // BUSYにならない＝受け付けられていない
+    return wait_ready(300 * 1000);                         
+ // 最大250ms（p.55）なので300ms
+}
 // ↓初期化関数の中で呼ぶ全メモリ消去関数
 // ➡毎回電源起動時の初期化で呼んでしまうと、ログのデータを読み出そうと電源
 // を入れた時にログが消えてしまう。
@@ -730,11 +777,9 @@ void AT25SF_erase_all(void){
  if(get_tactSW2())
  {  
     uint64_t start_time = time_us_64();
-    uint8_t tx = AT25SF_CHIP_ERASE_ALL;
+    uint8_t opecode = AT25SF_CHIP_ERASE_ALL;
     AT25SF_write_enable();
-    AT25SF_cs_low();
-    spi_write_blocking(AT25SF_SPI_PORT, &tx, 1);
-    AT25SF_cs_high();
+    AT25SF_send_only_opecode(opecode);
     // CSピンを High に戻した瞬間にIC内部で自動消去が始まる。
     // Chip Erase(全ﾒﾓﾘ領域の初期化※全て0xFF=１になる)
     // 全領域の消去には約10秒程度掛かる見込み
