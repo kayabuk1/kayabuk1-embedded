@@ -287,9 +287,9 @@ static inline void AT25SF_cs_high(void){
 }
 
 
-static void cmd_only(uint8_t op);                                   
+static void AT25SF_only_send_opecode(uint8_t op);                                 
 // 06h, C7h
-static void cmd_read(uint8_t op, uint8_t *buf, size_t len);         
+static void AT25SF_only_read(uint8_t op, uint8_t *buf, size_t len);         
 // 05h, 9Fh
 static void cmd_addr(uint8_t op, uint32_t addr);                    
 // 20h, 52h, D8h
@@ -302,13 +302,20 @@ uint8_t op, uint32_t addr, uint8_t *buf, size_t len);
 static bool wait_ready(uint32_t timeout_us);   
 // BUSYが外れたら true、時間切れなら false
 
-
-static void AT25SF_only_send_opecode(uint8_t opecode);
-static void AT25SF_only_send_opecode(uint8_t opecode)
+static void AT25SF_only_send_opecode(uint8_t op)
 {
         AT25SF_cs_low();    
-        spi_write_blocking(AT25SF_SPI_PORT, &opecode, 1);
+        spi_write_blocking(AT25SF_SPI_PORT, &op, 1);
         AT25SF_cs_high();
+}
+static void AT25SF_only_read(uint8_t op, uint8_t *buf, size_t len)
+{
+ uint8_t tx[len] = {0};
+ tx[0] = op;
+ AT25SF_cs_low();
+ spi_write_read_blocking(
+        AT25SF_SPI_PORT, tx, buf, len);
+ AT25SF_cs_high();
 }
 
 static inline void AT25SF_write_enable(void);
