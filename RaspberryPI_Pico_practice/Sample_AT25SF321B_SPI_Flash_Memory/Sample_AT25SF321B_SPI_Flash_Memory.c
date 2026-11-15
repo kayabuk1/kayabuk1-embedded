@@ -804,19 +804,42 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     uint32_t read_address = addr; //0000_0000h~3FFFFFh
     uint8_t tx[4] = {0};
 
+    // ◆外部txtファイルに読み出しデータ書き込み処理
     char filename[64];
     char time_str[32];
+    FILE *fp;
     time_t now;
     struct tm *local_time;
+    // 1. 現在時刻を取得
     time(&now); //time_t型の変数を引数として渡すと、
     // 現在のUNIX時間(UTC)を変数に格納してくれる。
     local_time = localtime(&now);
     //戻り値はtm型構造体へのポインタ。
     // この構造体の中に年・月・日・時・分・秒が分解されて格納。
+    // 2. 日時を文字列にフォーマット（例: 20261115_173400）
     strftime(time_str, sizeof(time_str),
      "%Y%m%d_%H%M%S", tm);
-    // strftime：
-    
+    // ◆strftime：日付や時刻のオブジェクトを、指定したフォーマット（形式）の文字列に変換する関数
+    // size_t strftime(char *s, size_t maxsize, const char *format,
+    // const struct tm *timeptr);
+    // • s: 変換された文字列を格納する文字配列（バッファ）のポインタ
+    // • maxsize: 格納する最大バイト数（通常は sizeof(char_array) を指定）
+    // • format: 日付・時刻の書式指定文字列（例: "%Y%m%d_%H%M%S"）
+    // • timeptr: 変換元となる struct tm 構造体のポインタ
+    // 3. ファイル名を組み立てる
+    snprintf(filename, sizeof(filename), "log_%s.txt", time_str);
+    // ◆snprintf：安全にフォーマット済みの文字列を作成する関数
+    // int snprintf(char *str, size_t size, const char *format, ...);
+    // • str : 出力先の文字配列（バッファ）へのポインタ
+    // • size : str に書き込める最大文字数（終端のヌル文字 \0 を含む）
+    // • format : 書式指定文字列（%d, %s など）
+    // • ... : 書式に埋め込む可変長引数
+    // • 戻り値 : 収まりきったかどうかに関わらず、
+    // 本来出力されるはずだった文字数（終端文字を含まない）
+
+    // 4. ファイルを作成・オープン
+    fp = fopen()
+ 
     for(uint8_t i = 0; i < 64 ; i++){
         tx[0] = opecode;
         tx[1] = (read_address >> 16) & 0xFF;
