@@ -870,6 +870,9 @@ void AT25SF_init(void) {
     gpio_init(AT25SF_PIN_CS);
     gpio_set_dir(AT25SF_PIN_CS, GPIO_OUT);
     gpio_put(AT25SF_PIN_CS, 1);
+
+    AT25SF_read_jedec_id();
+ // 初期化処理時に通信テストとして、JEDEC_IDを読み出す処理を行う。
 }
 void AT25_hardware_setup(void)
 {
