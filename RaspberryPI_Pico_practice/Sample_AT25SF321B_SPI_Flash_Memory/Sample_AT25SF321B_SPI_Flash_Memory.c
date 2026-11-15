@@ -811,12 +811,18 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
 // #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
 // #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
 static uint8_t read_buf[65536] = {0};
-// 関数の内側（ローカル変数）で uint8_t tx[65536] と rx[65536] を取ると、合計約131KBのスタックを消費します。Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こします（一般知識）。
-// 
-void dump_log_to_pc(uint32_t addr, uint8_t *buf, size_t len)
+// 関数の内側（ローカル変数）で uint8_t tx[65536] と 
+// rx[65536] を取ると、合計約131KBのスタックを消費する。
+// Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こす。
+// staticを付けて静的領域なら264KB、65535byte=64KB何とか足りる。
+// ➡が、やはり他のコードの使用する静的領域なども考えると大きすぎる可能性がある。
+// ➡4KB単位か、32KB単位を検討。
+void dump_log_to_pc(uint32_t end_addr);
+// PCへログを一括転送(ダンプ)する関数
+void dump_log_to_pc(uint32_t end_addr)
 { 
     uint64_t start_time = time_us_64();
-
+    printf("=== START DUMP ===\n");
     // ➡⚠Picoは独立したマイコンであるため、標準のfopen関数などを使っても
     // PC側のストレージ（Cドライブなど）にはアクセスできない仕組みになっています。
     // ➡どう記録するか検討。
@@ -859,7 +865,7 @@ void dump_log_to_pc(uint32_t addr, uint8_t *buf, size_t len)
      return 1;
     }
  
-    for(uint8_t i = 0; i < 64 ; i++){
+    for(uint32_t addr = 0x00; addr < end_addr ; addr += sizeof()){
 
         uint32_t start_read_block_time = time_us_32();
 
