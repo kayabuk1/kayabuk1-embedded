@@ -850,7 +850,9 @@ static volatile uint32_t log_count = 0;
 bool timer_1ms_callback(struct repeating_timer *t) {
     log_put(); // 1msごとにログ詰め込みを実行
     log_count++;
-    return log_count < 1024;   // 1024件 = ちょうど64ページで止まる
+    return log_count < 1024;   
+ // 1024件以上になったらfalseを返してタイマ割込みを止める
+ // ＝ちょうど64ページで止まる
 }
 
 
@@ -898,8 +900,6 @@ int main()
     AT25SF_init();
 
     struct repeating_timer timer;
-    // -1ms を指定して、きっかり1ms周期で割り込みを開始する
-    add_repeating_timer_ms(-1, timer_1ms_callback, NULL, &timer);
 
     while (true) { 
         AT25SF_erase_all();
@@ -907,7 +907,12 @@ int main()
         printf("SW2: %d\n", get_tactSW2());
         if(!get_tactSW0()){
             AT25SF_read(0x00000000, read_buf, 65536);
-        }      
+        }
+        if (erase_completed_flag){
+             add_repeating_timer_ms(-1, timer_1ms_callback, NULL, &timer);
+          // -1ms を指定して、きっかり1ms周期で割り込みを開始する
+         erase_completed_flag = false;
+        }
         flash_task();
         sleep_us(1);
     }
