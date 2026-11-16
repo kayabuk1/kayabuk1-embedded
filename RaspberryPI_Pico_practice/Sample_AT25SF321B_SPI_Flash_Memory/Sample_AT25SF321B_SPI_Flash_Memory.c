@@ -1,997 +1,477 @@
-
-// ◆2026/11/16コード内の古いコード整理や削除の為、
-// Old~.cファイルを作成して。そちらに古いコードを残し、
-// 現在の.cファイルから古いコード部分を削除する。
-// ◆2026年11月12日考えメモとりあえずバフに書き込む処理はある程度書けた
-// 次は、256byte 一気にAT25SFに書き込む処理だな。
-// ◆他やっておきたいこと
-// ●static inline修飾子を付けて、内部でのみ使う関数は、名前の競合の
-// 心配がないので、より短く簡潔な名称で使いやすく。例AT25SF_cs_low⇒cs_low
-// ●関数の並びがグチャグチャなので、整理する。
-// ●ページ単位での処理が可能になったら、セクタ4k単位での書込み処理を実装する
-// ◆logデータをそのまま16byte取得ごとにAT25SFへSPI通信するのは、
-// オーバヘッドが大きく、マイクロマウス制御に影響を及ぼすため、
-// 間にダブルバッファを挟み256byte一気に送信する方針に変更。
-// そのためコメントアウト。後ほど削除するか検討。
-
+/**
+ * @file  main.c
+ * @brief フラッシュのログを、机の上で試すためのプログラム 【アプリの層】
+ *
+ * この層の役割は、「いつ、何をするか」を決めることです。
+ * スイッチの代わりに、PCから送る1文字のコマンドで切り替えます。
+ * こうすると、スイッチ用のピンを使わずに済み、機体に載せたときにピンが余っているかを
+ * 気にしなくて済みます。機体に載せるときは、このファイルだけを自分のプログラムに置き換えます
+ * （README の「自分のプログラムに組み込む」を見てください）。
+ *
+ * ■ コマンド（シリアルモニタから1文字送る）
+ *     h : コマンドの一覧
+ *     i : JEDEC ID とステータスを表示する
+ *     t : 自己診断（消す → 読む → 書く → 読み戻す）。最初に、これが通るかを確かめる
+ *     e : ログの範囲を消去する（記録の前に、必ず行う）
+ *     l : 1msごとのダミーの記録を 1000件 行う
+ *     v : 記録を読み戻して、書いた値と同じかを自動で照合する
+ *     d : 記録をCSVで出す
+ *     s : 状態を表示する（書いたページ数、捨てたページ数、かかった時間）
+ *     r : 先頭の64バイトを、16進でそのまま表示する
+ *     U : 保護ビットを解除する（自己診断で保護が原因と出たときだけ。大文字）
+ *     C : チップ全体を消去する（10〜30秒かかる。大文字）
+ *   元に戻せない操作（U と C）は、押し間違えないように大文字にしてあります。
+ *
+ * ■ 最初に試す順番
+ *     i → t → e → l → v → d
+ */
 #include <stdio.h>
-#include <stdint.h>
-#include<string.h>
+
 #include "pico/stdlib.h"
-#include "hardware/spi.h"
-#include "hardware/sync.h"
-#include "buzzer/buzzer.h"
-#include "pico_led_sw/pico_led_sw.h"
-#include <time.h>
 
-#include "pico/rand.h"
+#include "at25sf/at25sf.h"
+#include "flash_log/flash_log.h"
 
-// ========= AT25SF321B(ﾌﾗｯｼｭﾒﾓﾘ)配線表（ピン割り当て表）=====================
-// -－ピン割り当て表
-// *　１｜!CS(ﾁｯﾌﾟｾﾚｸﾄ) ⇒ GPIO3 ※本番GPIO13
-// *　２｜SO(IO1)(SerialOutput)(MISO) ⇒ GPIO4 ※本番GPIO12
-// *　３｜!WP(IO2)(WriteProtect)書込み保護、内部ﾌﾟﾙｱｯﾌﾟ在り⇒フローティングに
-// *　４｜GND
-// ‐‐‐―――折り返し
-// *　５｜SI(IO0)(SreialInput)(MOSI) ⇒ GPIO7 ※本番GPIO11
-// *　６｜SCLK ⇒ GPIO6 ※本番GPIO10
-// *　７｜!HOLD(IO3)通信一時停止、内部ﾌﾟﾙｱｯﾌﾟ在り⇒フローティングに
-// *　８｜VCC
+/* 1000件 = 1秒分。16件で1ページなので、62ページと8件になります。
+ * わざと半端な数にして、最後の「詰めかけのページ」を書く処理（log_stop）も確かめます。
+ */
+#define TEST_RECORDS     1000u
+#define TEST_ERASE_BYTES AT25SF_BLOCK_SIZE /* 64KB = 約4秒分。消去は約0.3秒 */
 
-#define PICO2350 0
+/* 自己診断で使う場所。ログ（先頭から使う）と重ならないように、いちばん最後の4KBを使います。 */
+#define SELFTEST_ADDR (AT25SF_TOTAL_SIZE - AT25SF_SECTOR_SIZE)
 
-#if PICO2350 
-#define AT25SF_SPI_PORT spi1
-#define AT25SF_PIN_SCK 10
-#define AT25SF_PIN_SI  11
-#define AT25SF_PIN_SO  12
-#define AT25SF_PIN_CS  13
-#else
-#define AT25SF_SPI_PORT spi0
-#define AT25SF_PIN_SCK 6
-#define AT25SF_PIN_SO  4
-#define AT25SF_PIN_SI  7
-#define AT25SF_PIN_CS  3 
-#endif
-#define AT25SF_SPI_BAUDRATE   (10 * 1000 * 1000)
-// RP2040 のSPIマスター最大速度
-// 標準システムクロック 125 MHz の場合は、その半分の 62.5 MHz（正確には分周比2で 62.5 MHz）  
-// PL022 SPIコントローラの仕様上、マスターモードでは周辺クロック（SSPCLK）
-// に対するシリアルクロック（SSPCLKOUT）の最小分周比（CPSDVSR）が
-// 偶数の「2」であるため、周辺クロックの半分が上限。
-// AT25SF321Bは通常SPIで最大 108 MHz（3.0V〜3.6V時は最大 133 MHz）まで対応
-/*原文：
-For example, at the maximum SSPCLK (clk_peri) frequency on RP2040 of 133MHz, the maximum peak bit rate in master mode is 62.5Mbps. This is achieved with the SSPCPSR register programmed with a value of 2, and the SCR[7:0] field in the SSPCR0 register programmed with a value of 0.
-The ratio of minimum SSPCLK frequency to SSPCLKOUT maximum frequency in the case of the slave mode is 12, and for the master mode, it is two.
- F_SSPCLK(min) >= 2 * F_SSPCLKOUT(max) for master mode
-*/
-// 配線環境（物理面）の限界（一般知識）
-//  ・ブレッドボード／長いジャンパ線：配線の浮遊容量やインダクタンスによる
-// 波形なまり・反射が起きるため、10MHz〜15MHz 程度が無難。
-// ⇒結論：SPI周波数 10MHzでテストを行う。
-#define TX_SIZE_WRITE_PAGE 260
-
-/*____________________________________________________
-◆AT25SF321B 主要ステータスレジスタビット一覧
-ビット記号|所属レジスタ|ビット位置|R/W|機能および判定条件
-______________________________________________________
-・RDY/BSY|Status Register 1|Bit 0|R|
-    Ready/Busyフラグ 0: 準備完了（Ready） 1: 内部書き込み/消去動作中（Busy）
-・WEL|Status Register 1|Bit 1|R|
-    Write Enable Latchフラグ 0: 書き込み禁止（初期値） 1: 書き込み許可状態
-・BP0〜BP4|Status Register 1|Bit 2〜6|R/W|
-    ブロックプロテクト メモリ空間の保護領域をソフトウェアで設定。
-・QE|Status Register 2|Bit 1|R/W|
-    Quad Enableフラグ 0: Normal SPI (WP#/HOLD#動作)
-     1: Quad-SPI有効 (IO2/IO3動作)
-・P_SUS / E_SUS|Status Register 2|Bit 2 / 7|R|
-    Suspendフラグ 1: プログラム/消去処理がサスペンド（一時中断）中。
-・CMP|Status Register 2|Bit 6|R/W|
-    Complement Block Protectフラグ 0: 通常のプロテクト設定
-     1: BP0〜BP4で指定した保護領域を反転
-__________________________________________________________________
-*/
-// =====送信オペコード定義======================================
-// uint8_t opecode = NULL;
-#define JEDEC_ID_READ 0x9f //ベンダID、メモリ種類、メモリ容量。テストに。
-// 1Fはメーカーの番号、87 01はAT25SF321Bを表すデバイスの番号
-// ---読み出しオペコード
-#define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
-#define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
-#define AT25SF_READ_SFDP 0x5A //デバイス機能情報表示
-// ----制御系オペコード
-#define AT25SF_WRITE_ENABLE 0x06 //ｽﾃｰﾀｽﾚｼﾞｽﾀWELを 1 に(書込/消去許可)
-#define AT25SF_WRITE_DISABLE 0x04 //WELﾋﾞｯﾄを 0 にして書込/消去禁止
-#define AT25SF_ENABLE_RESET 0x50 //初期状態へﾘｾｯﾄ許可1段階目
-#define AT25SF_RESET_DEVICE 0x66  //ﾘｾｯﾄ許可2段階目。約30us掛かる。
-#define AT25SF_DEEP_POWER_DOWN 0xB9   //超低消費電力モード13uA⇒1uAに
-#define AT25SF_RELEASE_POWER_DOWN 0xAB //超低消費電力モード解除
-//-----書込み、消去オペコード
-#define AT25SF_PAGE_PROGRAM 0X02 //0.4ms:1byte~256byte(1ﾍﾟｰｼﾞ)の範囲内で書込み
-#define AT25SF_BLOCK_ERASE_4KB 0X20 //55ms:4kB最小ﾌﾞﾛｯｸ(ｾｸﾀ)単位ﾃﾞｰﾀ消去(全ぶFFに)
-#define AT25SF_BLOCK_ERASE_32KB 0X52 //120ms:32kBのﾊｰﾌﾌﾞﾛｯｸ単位で消去
-#define AT25SF_BLOCK_ERASE_64KB 0XD8 //200ms:64kBの標準ﾌﾞﾛｯｸ単位で消去
-#define AT25SF_CHIP_ERASE_ALL 0XC7 //10秒:メモリ全体を消去
-#define AT25SF_SUSPENDE 0X75 //書込み、消去動作を一時中断、ﾌﾞﾛｯｸ読込を優先
-#define AT25SF_RESUME 0X7A //中断解除、書込み、消去再開
-//------ステータスレジスタ操作オペコード
-#define READ_STATUS_REGISTER_1 0X05 //Busy判定、書込消去後のﾎﾟｰﾘﾝｸﾞ処理
-#define WRITE_STATUS_REGISTER_1 0X01
-#define READ_STATUS_REGISTER_2 0X35 
-#define  WRITE_STATUS_REGISTER_2 0X31
-#define READ_STATUS_REGISTER_3 0X15
-#define  WRITE_STATUS_REGISTER_3 0X11
-//================================================================
-#define PAGE_WRITE_TAKES_TIME 1000//0.7ms以上完了までに必要 1000us=1ms
-#define SECTOR_ERASE_TAKES_TIME 10000 //セクタ消去標準50ms 10ms設定
-// ===DEBUG用 printf有効化 走行時 0に===================
-#define AT25SF_DEBUG 1
-// #if AT25SF_DEBUG
-// printf("：%d\n",);
-// #endif の様にコード内にprintfを埋め込んで使う。
-
-/* ======各処理に掛かる時間（データシートp.55より）=======
-処理内容：データシートの記号表記：標準値(Typ)：最大値(Max)
-ページ書き込み（256バイト）：tPP：0.4ms：3.4ms
-セクタ消去（4 kBytes）：tBLKE：55ms：250ms
-ﾊｰﾌﾌﾞﾛｯｸ消去（32 kBytes）：tBLKE：120ms：450ms
-ブロック消去（64 kBytes）：tBLKE：200ms：700ms
-チップ全消去（Chip Erase）：tCHIP：10sec：30sec
-ステータスレジスタ書込み：tWRSR：5ms：30ms
- ====================================================*/
-typedef union{
-    uint8_t bytes[256]; //256Bytes (000000h〜0000FFh）
-}Page_256B_t; //16384個
-
-Page_256B_t log_page_buf[2] = {0};
-// SPIで直接割込み書き込みでは制御に影響が出てしまい、速度的に間に合わない。
-// ➡ダブルバッファで、256byte分貯めてから一気に書き込む。
-// （書き込んでいる間にもう一つのバッファにデータを書き込む）
-
-typedef union {
-    uint8_t bytes[4096];
-    Page_256B_t pages[16]; //4096Bytes
-}Sector_4kB_t; //1024個
-
-Sector_4kB_t log_sector_buf[2] = {0};
-// SPIで直接割込み書き込みでは制御に影響が出てしまい、速度的に間に合わない。
-// ➡ダブルバッファで、4kB分貯めてから一気に書き込む。のも試す。
-// （書き込んでいる間にもう一つのバッファにデータを書き込む）
-
-typedef union{
-    uint8_t bytes[32768];
-    Page_256B_t pages[128];
-    Sector_4kB_t sectors[8];
-} Block_32kB_t; //Block128個
-
-typedef union{
-    uint8_t bytes[65536];
-    Page_256B_t pages[256];
-    Sector_4kB_t sectors[16];
-    Block_32kB_t half_blocks[2];
-}Block_64kB_t; //block64個
-
-// ◆フラッシュメモリに一回記録するlog_dataの構造
-typedef struct log_data
-{
-    uint8_t sensor_displacement;
-    uint8_t sensor_binary;
-    uint16_t target_speed;
-    uint16_t left_speed;
-    uint16_t right_speed;
-    int8_t left_motor_duty; //逆回転時にマイナスduty使用するため符号あり
-    int8_t right_motor_duty;
-    int16_t target_angular_velocity;
-    int16_t now_angular_velocity;
-    uint16_t vcc_mv;
-}Sensors_data_t; //計16byte
-
-#if AT25SF_DEBUG==1
-// ダミーデータを設定。
-volatile Sensors_data_t now_sensors_data 
-= {
+/* 試験で書く、固定のダミー値。上位と下位のバイトが違う値、負の数を混ぜてあり、
+ * バイトの並べ方や符号の扱いが間違っていれば、読み戻したときに分かります。
+ * （0xF0F0 のように上位と下位が同じ値だと、2つのバイトが入れ違っていても気づけません）
+ * vcc_mv だけは、記録のたびに連番（0, 1, 2, …）を入れます。読み戻したときに、
+ * 抜けや重なりが無いかを確かめられるようにするためです。
+ * （乱数だと、読み戻した値が正しいかどうかを比べられません）
+ */
+static const Sensors_data_t test_pattern = {
     .sensor_displacement = 0x0F,
     .sensor_binary = 0xF0,
-    .target_speed = 0xF0F0,
+    .target_speed = 0x1234,
     .left_speed = 0x00FF,
     .right_speed = 0xFF00,
-    .left_motor_duty = 0x0F,
-    .right_motor_duty = -16, //int8_t なので 0xFF=256は範囲外。負の値でシフト動作確認。
-    .target_angular_velocity = -256, //int16_tなので0xFF00では範囲外
-    .now_angular_velocity = 0x00FF,
-    .vcc_mv = 0X0FF0
+    .left_motor_duty = 15,
+    .right_motor_duty = -16,
+    .target_angular_velocity = -256,
+    .now_angular_velocity = 255,
+    .vcc_mv = 0, /* 連番で上書きする */
 };
-void pack_random_sensordata();
-void pack_random_sensordata(){
-    now_sensors_data.sensor_displacement 
-    = (uint8_t)get_rand_32();
-    now_sensors_data.sensor_binary 
-    = (uint8_t)get_rand_32();
-    now_sensors_data.target_speed 
-    = (uint16_t)get_rand_32();
-    now_sensors_data.left_speed 
-    =  (uint16_t)get_rand_32();
-    now_sensors_data.right_speed 
-    = (uint16_t)get_rand_32();
-    now_sensors_data.left_motor_duty 
-    = (int8_t)get_rand_32();
-    now_sensors_data.right_motor_duty 
-    = (int8_t)get_rand_32(); 
-    //int8_t なので 0xFF=256は範囲外。負の値でシフト動作確認。
-    now_sensors_data.target_angular_velocity 
-    = (int16_t)get_rand_32(); 
-    //int16_tなので0xFF00では範囲外
-    now_sensors_data.now_angular_velocity 
-    = (int16_t)get_rand_32();
-    now_sensors_data.vcc_mv = (uint16_t)get_rand_32();
-}
-#else
-volatile Sensors_data_t now_sensors_data = {0};
-#endif
 
-typedef struct {
-    uint64_t chip_erase_time;
-    uint32_t write_1page_time[1024];
-    uint64_t write_count;
-    uint64_t read_time;
-}mesurement_time_t;
-mesurement_time_t mesurement_time = {0};
-
-#if 0 //RP2350は内蔵SRAM 520KB のため、こんな変数は使えない。
-// データ構造把握用
-typedef union{   
-    Block_64kB_t blocks[64];
-    Block_32kB_t half_blocks[128];
-    Sector_4kB_t sectors[1024];
-    Page_256B_t pages[16384];
-    uint8_t bytes[4194304];
-}AT25SF321B_AllMemory_32Mbit_t;
-#endif
-// ===グローバル変数========================
-
-// ==========================================
-// ------ハードウェアドライバ部分
-
-// -----タイマー割り込みで書込み＆読み出す部分
-bool AT25SF_write_timer_start(int64_t intervar_us);
-// void AT25SF_read_timer(uint64_t memory_address, );
-// 何を渡すか。
-
-// -----タイマー割込みの中で呼ばれる関数や、その他基本関数
-
-//================ 形ごとの共通関数（内部専用）======================
-/*
-◆コマンドの送り方は、5つの形しかない
-データシートのタイミングチャートを並べると、このICへの命令は、
-どれも次の5つの形のどれかです。
-① [op]                        06h  04h  C7h
-② [op][← 読む …]              05h  9Fh
-③ [op][アドレス×3]            20h  52h  D8h
-④ [op][アドレス×3][書く … →]  02h
-⑤ [op][アドレス×3][← 読む …]  03h
-==========================================
-共通関数	形	今のコードで同じことをしている所
-cmd_only	①	AT25SF_write_enable() の中身、AT25SF_send_opecode()、
-AT25SF_erase_all() でC7hを送っている3行
-cmd_read	②	read_status_register_1()、read_status_is_busy()、
-AT25SF_read_jedec_id()
-cmd_addr	③	まだ無い（セクタ消去とブロック消去で使う）
-cmd_addr_write	④	log_write_1page() の送信部分、AT25SF_write_byte()
-cmd_addr_read	⑤	AT25SF_read() そのもの
-wait_ready	②の繰り返し	AT25SF_erase_all() の中の 
-while (read_status_is_busy()) のループ
-*/
-static inline void AT25SF_cs_low(void);
-static inline void AT25SF_cs_low(void){
-    gpio_put(AT25SF_PIN_CS, 0);
-}
-static inline void AT25SF_cs_high(void);
-static inline void AT25SF_cs_high(void){
-    gpio_put(AT25SF_PIN_CS, 1);
-}
-
-
-static void AT25SF_only_send_opecode(uint8_t op);                                 
-// 06h, C7h
-static void AT25SF_only_read(uint8_t op, uint8_t *buf, size_t len);         
-// 05h, 9Fh, 読み込んだデータを入れるbufを渡してそれにデータを入れてもらうので
-// 戻り値はvoidにする。
-static void AT25SF_send_opecode_addr(uint8_t op, uint32_t addr);                    
-// 20h, 52h, D8h(4KB消去、32KB消去、64KB消去)
-static void cmd_addr_write(
-uint8_t op, uint32_t addr, const uint8_t *buf, size_t len);  
-// 02h
-static void cmd_addr_read(
-uint8_t op, uint32_t addr, uint8_t *buf, size_t len);         
-// 03h
-static bool wait_ready(uint32_t timeout_us);   
-// BUSYが外れたら true、時間切れなら false
-
-static void AT25SF_only_send_opecode(uint8_t op)
-{
-        AT25SF_cs_low();    
-        spi_write_blocking(AT25SF_SPI_PORT, &op, 1);
-        AT25SF_cs_high();
-}
-static void AT25SF_only_read(uint8_t op, uint8_t *buf, size_t len)
-{
-    uint8_t tx[len];
-    tx[0] = op;
-    for (uint8_t i=1; i < len; i++){
-       tx[i] = 0x00;
-    }
-    AT25SF_cs_low();
-    spi_write_read_blocking(
-           AT25SF_SPI_PORT, tx, buf, len);
-    AT25SF_cs_high();
-}
-
-static inline void AT25SF_write_enable(void);
-static inline void AT25SF_write_enable(void){
-    // WEL: WriteEnableLatch
-    uint8_t opecode = AT25SF_WRITE_ENABLE;
-    AT25SF_only_send_opecode(opecode);
-    // WriteEnaaleコマンド 06hを送信し、書込み許可BIT(WEL)を１に。
-    // WELが１になるのは CS が HIGH になった瞬間。
-    // この後、データの書き込み処理などが続き、BUSYBITが０になると、
-    // 自動的に WELBIT も ０ み戻る。
-}
-
-
-uint8_t read_status_register_1(void);
-/**
- * @brief ステータスレジスタ1を読み出す関数
- * @return 取得したステータスレジスタ1の8bitデータ
+/* ===== 1msタイマー（試験用） ================================================
+ * 機体では、制御の割り込みがこの役をします。ここでは、タイマーで代用しています。
  */
-uint8_t read_status_register_1(void)
-{   
-    uint8_t op = READ_STATUS_REGISTER_1;
-    uint8_t rx[2] = {0};
-    AT25SF_only_read(op, rx, sizeof(rx));
-    return rx[1];
-}
+static repeating_timer_t test_timer; /* タイマーが動いている間ずっと必要なので、関数の外に置く */
+static volatile uint32_t test_count = 0;
+static volatile bool     test_running = false;
+static volatile bool     test_finished = false; /* 割り込み → main への合図 */
 
-typedef enum {FLASH_BUSY, FLASH_READY} flash_state_t;
-flash_state_t flash_state = FLASH_BUSY;
-bool read_status_is_busy(void);
-/**
- * @brief ステータスレジスタ1を読み出す関数
- * @return 取得したステータスレジスタ1のBIT0の 0 or 1
- */
-bool read_status_is_busy(void)
+static bool test_timer_cb(repeating_timer_t *t)
 {
-    uint8_t op = READ_STATUS_REGISTER_1;
-    uint8_t rx[2] = {0};
-    AT25SF_only_read(op, rx, sizeof(rx));
-    // opecodeの8バイト後のダミービット8バイト送信して、
-    // 8ビットのレジスタ1のデータが返ってくるので、送るデータ数は2。
-    // SPIはリングバッファなので、受信するには同じサイズのデータを送っている。
-    bool status = rx[1] & 0x01;
-    printf("BUSY/REDY：%d\n",status);
-    flash_state = !status;
-    // なので opecode 送信時にもダミーデータ8bitを受信している。
-    // なので、ステータスレジスタが入っているのはrx[1]。
-    return status;
-    // Ready/BusyBITが 1の時Busy,0の時Ready。
-}
+    (void)t; /* 使わない引数。警告を出さないための書き方 */
 
-// repeating_timer_t * を受け取るタイマーコールバック用アダプター
-static bool polling_status_callback(repeating_timer_t *timer)
-{
-    (void)timer;
-    return read_status_is_busy();
-}
+    now_sensors_data.vcc_mv = (uint16_t)test_count; /* 連番 */
+    log_put(&now_sensors_data);
+    test_count++;
 
-/**
- * 
- */
-bool AT25SF_read_jedec_id(void) {
-    uint8_t rx_id[3] = {0};
-    uint8_t op = JEDEC_ID_READ;
-    AT25SF_only_read(op, rx_id, sizeof(rx_id));
-    bool AT25SF_init_status =
-     (rx_id[0]==0x1f && rx_id[1]==0x87 && rx_id[2]==0x01);
-    #if AT25SF_DEBUG
-    printf("%02X %02X %02X\n", rx_id[0], rx_id[1], rx_id[2]);
-    printf("通信成否: %d\n", AT25SF_init_status);
-    #endif
-    return AT25SF_init_status;
-}
-
-// ===============◆割り込み処理考えメモ==========================
-// add_repeating_timer_us()をそのまま使うのでは使いずらい、
-// ➡start_polling()みたいな関数でラップしたい。
-// start_polling⇒add_repeating_timer_ms⇒polling_timer_callback
-// ⇒この中でread_status_is_busy()を実行させる。
-// ⚠Readyになったことを誰にも知らせていないのでmainから不明問題。
-// ➡read_status_is_busy()自体がboolを返すのでif()の条件として使う。
-// ➡状態保持用のデータ、構造体などを用意してそこのフラグを書き換える。
-// 今はis_busy-write関数など、とダイレクトにつながっているので、
-// is_busy-状態記録バッファ-write関数などにして疎結合にする？
-static repeating_timer_t polling_timer;
-// ↑add_repeating_timer_us() に渡すタイマー管理用の構造体は、
-// タイマーが動いている間ずっとメモリ上に生き残っている必要がある。
-bool start_polling(uint64_t interval_us,
-bool(*polling_timer_callback)(repeating_timer_t *));
-bool start_polling(uint64_t interval_us,
-bool(*polling_timer_callback)(repeating_timer_t *))
-{
-    return add_repeating_timer_us(
-        interval_us, polling_timer_callback, NULL, &polling_timer
-    );
-    // ⚠注意：add_repeating_timer_us に渡す関数は、
-    // 「repeating_timer_t * を1つ受け取り、boolを返す」形と決まっている。
-}
-// main内使用例
-//     start_polling(PAGE_WRITE_TAKES_TIME, polling_status_callback);
-// ◆ポーリング処理考えメモ
-// ●ポーリング間隔はどの程度が良いか？根拠が分かる部分はある？
-// ➡データシートの「Page Program Time（標準約0.7ms）」や
-// 「Sector Erase Time（標準約50ms）」が目安。
-// マイコンが全速力でSPIを回し続けるのを防ぐため、
-// 書き込みなら100μs〜1ms、消去なら1ms〜10ms程度のウェイトを入れるのが現実的。
-// ●0x05を送れば、自動的にステータスビットのBIT0Ready/Busyフラグが読み取れる？
-// ➡Cから返ってくるのはステータスレジスタ全体の「8ビット（1バイト）」。
-// 自動でBit0だけにはならない。
-// ●それとも受けっとった8bitのデータから自分でビットシフト等で取り出す必要ある？
-// ●それなら関数名もread_status_is_busy();とかに変えようかな。
-// ●何かの処理ではCSLOWにした後に、通信が終わったら自動でWELを0に戻してくれた
-// 気がしているのだけれど、それは何の処理だったか分かる？
-// ➡Page Program（書き込み）やSector Erase（消去）などの内部処理が
-// 完了したとき、IC側が自動でWELを 0（書き込み禁止）に戻す。
-
-// ↓基本的にはSPIを通信のいつもの方でオペコードを送信する書き方で
-// 良いと思うが、特によく使うもの、明示的に書いて処理を書いておいたほうが
-// 良いものは別に関数としてまとめておくのがよいかな。
-// 書き込んだら、書き込んだ分だけ、アドレスを進めるカウンターが欲しいな。
-// 書込み終わったらカウンタを進める処理をする。
-// アドレスは24bitだな丁度よい型がないな。uint8_tを3個、0x00 00 00
-// みたいにして増やしていくのが良いのだろうか？
-// 全送信データは書込みなら40bit
-// ＝＝＝＝＝＝＝＝＝＝割込みについてのメモここまで＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
-
-static uint32_t memory_address = 0x00000000; //00000000h~3FFFFFh
-static uint8_t page_count = 0;
-
-void AT25SF_write_byte(uint8_t opecode, uint8_t data);
-void AT25SF_write_byte(uint8_t opecode, uint8_t data)
-{
-    // if(opecode==NULL) return; //ninja: build stopped: subcommand failed.
-    if(read_status_is_busy()){
-        return;
-    }else{
-        uint8_t tx_buf[5] = {0};
-        tx_buf[0] = opecode;
-        tx_buf[1] = (memory_address >> 16) & 0xFF;
-        tx_buf[2] = (memory_address >> 8) & 0xFF;
-        tx_buf[3] = memory_address;
-        tx_buf[4] = data;
-        AT25SF_write_enable();
-        AT25SF_cs_low();
-        spi_write_blocking(AT25SF_SPI_PORT, tx_buf, 5);
-        AT25SF_cs_high();
-        // 256byteを越えてページが跨ってしまう場合は、ページを変える
-        // 処理を書く必要がある。
-        /*◆memory_addressについて
-        ●ページ番号は memory_address >> 8
-        ●ページ内の位置は memory_address & 0xFF
-        ●セクタ番号は memory_address >> 12 で計算できるのはなぜか。
-        ===================================================
-        10進数で考えると
-        1ページに100件書ける帳簿で、通し番号12345番は「123ページ目の45番」。
-        ページ番号は100で割った商で、下2桁を捨てた数。
-        ページ内の位置は余りで、下2桁だけを残した数。
-
-        2進数でも同じ。
-        1ページは256バイト、つまり2の8乗バイト。
-
-        256で割る ＝ 下8ビットを捨てる ＝ >> 8 ＝ ページ番号
-        256で割った余り ＝ 下8ビットだけ残す ＝ & 0xFF
-        （0xFF は、下8ビットだけが1のマスク）＝ページ内の位置（アドレス）
-
-        16進数の1桁は4ビットなので、8ビットは16進数の下2桁。
-        セクタは4096バイト、つまり2の12乗バイト。
-        なので、>> 12 がセクタ番号、& 0xFFF がセクタ内の位置になる。
-
-        例：アドレス 0x012345
-
-        知りたいもの	計算	結果
-        ページ番号	0x012345 >> 8	0x0123（291）
-        ページ内の位置	0x012345 & 0xFF	0x45（69）
-        セクタ番号	0x012345 >> 12	0x012（18）
-        セクタ内の位置	0x012345 & 0xFFF	0x345
-
-        24ビットのアドレスを図にすると、次のとおり。
-
-        A23 ........ A12 | A11 ... A8 | A7 ........ A0
-        <-- セクタ番号 -->|<------ セクタ内の位置 ------>
-        <------- ページ番号 --------->|<- ページ内の位置 ->
-        データシート「4KBの消去では A11〜A0 を無視する」。
-        これは、この図の「セクタ内の位置」の部分。
-        どのセクタを消すかは上位のビットだけで決まるので、
-        セクタ内のどのアドレスを送っても、同じセクタが消える（下位12ビットは関係ない）。
-        64KBの消去なら A15〜A0 を無視するので、>> 16 がブロック番号。
-        */ 
-
-    }
-}
-
-
-/*◆変数についてのメモ
-変数ごとに「誰が書き、誰が読むか」を決める。
-割り込みとmainが関わるコードでは、変数ごとにこれを決めておくと、
-迷わなくなる。
-　　　　　　　　　　　　　　　　変数	意味	書く人	読む人
-total_bytes、now_filling、nth_byte｜割り込みが今どこに詰めているか｜割り込み｜割り込み
-buf_state｜どの箱が運ばれる待ちか（札）｜割り込み（付ける）,main（外す）｜両方
-memory_address	フラッシュの次の書き込み先	main	main
-pack_dropped	あふれた回数	割り込み	main（表示）
-
-mainは now_filling を読む必要がない。
-mainが知りたいのは「どの箱を運ぶか」なので、buf_state だけを見れば足りる。
-両方から触る変数は、buf_state と pack_dropped 。
-この2つに volatile を付ける。
-*/
-
-typedef enum{
-    NOT_READY = -1,
-    BUF_A = 0,
-    BUF_B =1
-} buf_state_t;
-volatile buf_state_t buf_state = NOT_READY;
-//書き込みを待っているバッファの番号。無ければ -1
-// ➡bufの状態がわかりやすい様にenum作ったのにうまく使えていないな、、、。
-volatile static uint pack_dropped = 0; //  // 書込みあふれ。数えておき、このページは捨てる
-static uint32_t total_bytes = 0; 
-static uint16_t nth_byte = 0; //バッファの中で、次に詰める位置（0〜255）
-static uint8_t now_filling = 0; 
-//割り込みが今詰めているバッファの番号（0か1）
-void log_pack(uint8_t *dst, const volatile Sensors_data_t *src);
-void log_pack(uint8_t *dst, const volatile Sensors_data_t *src)
-// ↑log_page_buf[0~1].bytes[n]どちらのページのどの位置かまで指定して渡す。
-// コピーするデータもセンサーデータ構造体が前のデータ用など増えた時に備えて、
-// ポインタ汎用的な *src で受け取り、アロー演算子でアクセスする。
-// ◆引数についてメモ
-// C言語では dst[i]と書いた瞬間にポインタではなく実体と解釈される。
-// 内部で、ポインタ[番号] ⇒*(ポインタ + 番号) に変換される。
-// dst：配列の先頭アドレス＝ポインタ
-// dst+1：次の配列要素のアドレス＝ポインタ
-// *(dst + 1)：間接参照*＝その場所にあるデータ実体そのもの。
-// それを「別の変数に代入したとき」や「ポインタではない関数の引数に渡したとき」
-// コピーが作られる。
-// ●引数への値渡しとポインタ渡しについて
-// 「.」を使うと実体のコピーが渡され元データ壊れない為安全。
-// しかし毎回256Byteのコピーが発生して処理が重くなる。
-// 「*」で渡し、「->」で扱う場合はデータの住所(4~8byte程度)のため一瞬で渡せる。
-// srcの修飾子について。
-// now_sensors_data には「割り込み等で勝手に書き換わる可能性がある
-// （volatile）」という目印がついているのに、関数の引数 Sensors_data_t *src
-//  に渡すときにその目印を書かないとコンパイルエラーになる。
-{   
-    uint32_t ints = save_and_disable_interrupts();
-    dst[0] = src->sensor_displacement;
-    dst[1] = src->sensor_binary;
-    dst[2] = (src->target_speed >> 8) & 0xFF;
-    dst[3] = src->target_speed & 0xFF;
-    dst[4] = (src->left_speed >> 8) & 0xFF;
-    dst[5] = src->left_speed & 0xFF;
-    dst[6] = (src->right_speed >> 8) & 0xFF;
-    dst[7] = src->right_speed & 0xFF;
-    dst[8] = src->left_motor_duty;
-    dst[9] = src->right_motor_duty;
-    dst[10] = ((uint16_t)src->target_angular_velocity >> 8) & 0xFF;
-    dst[11] = src->target_angular_velocity & 0xFF;
-    dst[12] = ((uint16_t)src->now_angular_velocity >> 8) & 0xFF;
-    dst[13] = src->now_angular_velocity & 0xFF;
-    dst[14] = (src->vcc_mv >> 8) & 0xFF;
-    dst[15] = src->vcc_mv & 0xFF;
-    restore_interrupts(ints);
-
-    // ◆呼び出し側で log_pack(
-    // &log_page_buf[now_filling].bytes[nth_byte], &now_sensors_data);
-    // と、nth_byte 分進めたアドレスを渡しているので、
-    // 位置が二重に足される。128バイト目以降は、配列の外を書き換える
-    // ➡dst[0]~[15]で良い。
-    // ◆思い付きメモ：now_sensors_data のメンバ変数名が異なるので、
-    // ループで回すことが出来ない。ループで回す方法はないだろうか？
-    // ポインタで受け取り、ポインタをインクリメントする？
-  
-    // ◆いや、forで回すのでなくて、割り込みで呼ばれることを想定して、
-    // 配列の指定を、%16,%256などを使って、staticかグローバルにして管理して、
-    // 値の格納処理後に、カウントを進める書き方に変える必要があるかな。
-    // それで256byte=1pageバッファに値が溜まったら、startwritelogAT25SF
-    // みたいな非同期処理の関数を呼び出してスタートさせる処置みたいに掛けたら
-    // 理想だな。
-}
-
-// ↓バッファに詰め込む係（割り込み）の中で呼ばれる。
-// それとは別に、AT25SFに書き込む係(main内で実行※重いSPI通信使う為)も作る。
-void log_put(void);
-void log_put(void)
-{   
-    now_filling = (total_bytes / 256) % 2; //16/256=0%2=0,256/256=1%2=1,272/256=1%2=1,512/256=2%2=0
-    nth_byte = total_bytes % 256; //16%256=16,32%256=32...256%256=0
-    // if (nth_byte >= 256){
-    //     now_filling = now_filling ^ 1;
-    // } ifを使った方が分かりやすいかもしれない、、、。
-    log_pack(
-        &log_page_buf[now_filling].bytes[nth_byte], &now_sensors_data);
-    // ↑16byte詰める関数を呼び出しbufに詰める。
-    total_bytes += 16;
-    // ↑log_pack()は詰めるだけに徹して、total_byte加算はより大きい役割の
-    // log_put()内に記述。
-
-    #if AT25SF_DEBUG
-    pack_random_sensordata();
-    #endif
-    // ●メモ：if(nth_byte >= 256) start_write_AT25SF();
-    // みたいに256になったら書込み処理をスタートさせたい。
-    if(total_bytes % 256 == 0){ //一ページ溜まった瞬間。
-        if(buf_state >= 0){ //-1になっていない＝前のページ書込み未完了。
-            pack_dropped++; //詰め込みあふれを数え。このページは捨てる。
-            total_bytes -= 256; //今のページを捨てて同じページに最初から
-            // -256しなくても、バフを切り替えなければ、そのまま上書きされる？
-            // ➡次の呼び出しの先頭でnow_filling = (total_bytes / 256) % 2;
-            //16/256=0%2=0,256/256=1%2=1,
-            // が計算され、now_fillingが切り替わってしまうので －256は必須。
-        }else{
-            switch (now_filling)
-            {
-            case BUF_A:
-            buf_state = BUF_A;
-                break;
-            
-            case BUF_B:
-            buf_state = BUF_B;
-                break;
-            }
-            // buf_state = now_filling;
-            // ➡折角enum定義を書いたので、switch文に変えて可読性高くした。
-            // now_filling ^= 1;
-            // ➡自身との排他的論理和は毎回1になるので間違い。
-            // Bが満杯になったとき：1 ^ 1 = 0 
-            // → !now_filling は1（B）→ たまたま正しい
-            // Aが満杯になったとき：0 ^ 0 = 0 
-            // → !now_filling は1（B）→ 間違い
-            // つまり、半分のページは偶然うまくいき、
-            // 残り半分は間違ったページを書く。
-            // ^= 1 にすれば両方正しくなるが、
-            // 次の呼び出しの先頭で now_filling は計算し直されるので、
-            // この行はそもそも要らなかった。➡消去。
-
-        }
-    }
-}
-
-// 256byte=1pageをまとめて書き込む関数。
-bool log_write_1page(uint8_t page);
-bool log_write_1page(uint8_t page) //page:0ならA、1ならB
-{
-    if(read_status_is_busy()){
-        // 呼び出しもとですでに判定しているので不要？
+    if (test_count >= TEST_RECORDS) {
+        /* 割り込みの中では、止める処理（SPIを使う）を行いません。
+         * 合図だけ立てて、mainに任せます。false を返すと、タイマーが止まります。
+         */
+        test_finished = true;
         return false;
-    }else{
-        
-            uint32_t start_time = time_us_32();
-        // uint16_t max = (sizeof(Page_256B_t)/2) + 4;
-        // uint8_t tx[max] = {0};
-        // ⚠↑の書き方は間違い。配列の要素数指定する max が、
-        // コンパイル時に決まらず、実行時に決まる普通の変数(可変長配列)
-        // になっているためサイズがコンパイル時に分からないため、
-        // ={0};で一括に初期化できない。
-        uint8_t tx[TX_SIZE_WRITE_PAGE] = {0};
-        uint8_t tx_1[4] = {0};
-        uint8_t opecode = AT25SF_PAGE_PROGRAM;
-        tx[0] = opecode;
-        tx[1] = (memory_address >> 16) & 0xFF;
-        tx[2] = (memory_address >> 8) & 0xFF;
-        tx[3] = memory_address;
-        memcpy(
-            &tx[4], log_page_buf[page].bytes, 256);
-        // void *memcpy
-        // (void *__restrict__, const void *__restrict__, size_t)
-        // コピー先のメモリ領域のポインタ, コピー元のメモリ領域のポインタ, コピーするサイズ（バイト数）
-        // memcpy（メモリ・コピー）
-        // あるメモリ領域の内容を別のメモリ領域へ高速にコピーするための
-        // 標準ライブラリ関数。
-        // ◆修正点：log_write_1page が !now_filling のページを書く
-        // ページがたまった直後は、次の割り込みまで最大1ms、
-        // now_filling がまだ詰め終えたページを指している。
-        // そのため !now_filling は古い方のページになる。
-        // ※mainループは数μsごとに回る。
-        AT25SF_write_enable();
-        AT25SF_cs_low();
-        spi_write_blocking(AT25SF_SPI_PORT, tx, TX_SIZE_WRITE_PAGE);
-        AT25SF_cs_high();
-        memory_address += 256;
+    }
+    return true;
+}
 
-        uint32_t end_time = time_us_32();
-        uint32_t elapsed_time = end_time - start_time;
-        mesurement_time.write_1page_time[mesurement_time.write_count]
-        = elapsed_time;
-        if(mesurement_time.write_count < 1024){
-            mesurement_time.write_count++;
-        }
-        
-        #if AT25SF_DEBUG
-        printf("1page書込み時間：%lu μs\n", elapsed_time);
-        #endif
+static void test_log_start(void)
+{
+    if (test_running) {
+        printf("記録中です。\n");
+        return;
+    }
+    now_sensors_data = test_pattern;
 
-        return true;
+    if (!log_start()) {
+        printf("記録を始められません。先に 'e' で消去してください（1回の消去につき、記録は1回です）。\n");
+        return;
+    }
+    test_count = 0;
+    test_finished = false;
+    test_running = true;
+    /* -1 は「前回の開始から1ms後」という意味です。正の値にすると
+     * 「前回の終了から1ms後」になり、処理時間の分だけ周期が延びます。
+     */
+    if (!add_repeating_timer_ms(-1, test_timer_cb, NULL, &test_timer)) {
+        test_running = false;
+        log_stop();
+        printf("タイマーを始められませんでした。\n");
+        return;
+    }
+    printf("記録を始めました（%lu件、約1秒）。\n", (unsigned long)TEST_RECORDS);
+}
+
+/* ===== 表示 ================================================================= */
+
+static void print_help(void)
+{
+    printf("\n--- コマンド ---\n");
+    printf(" i : IDとステータス     t : 自己診断\n");
+    printf(" e : ログの範囲を消去   l : 記録(%lu件)   v : 照合   d : CSVで出す\n",
+           (unsigned long)TEST_RECORDS);
+    printf(" s : 状態               r : 先頭64バイト(16進)\n");
+    printf(" U : 保護の解除         C : チップ全消去\n");
+    printf(" 最初は i → t → e → l → v → d の順に試してください。\n\n");
+}
+
+/** IDとステータスを表示します。IDが正しければ true。 */
+static bool print_id_status(void)
+{
+    uint8_t id[3];
+    AT25SF_read_id(id);
+    uint8_t s1 = AT25SF_read_status1();
+    uint8_t s2 = AT25SF_read_status2();
+    bool id_ok = (id[0] == AT25SF_ID_BYTE0 && id[1] == AT25SF_ID_BYTE1 && id[2] == AT25SF_ID_BYTE2);
+
+    printf("JEDEC ID : %02X %02X %02X （AT25SF321B なら 1F 87 01）\n", id[0], id[1], id[2]);
+    printf("SPI      : %lu Hz\n", (unsigned long)AT25SF_get_baudrate());
+    printf("SR1      : %02X  BUSY=%d WEL=%d BP=%02X SRP0=%d\n", s1,
+           (s1 & AT25SF_SR1_BUSY) ? 1 : 0, (s1 & AT25SF_SR1_WEL) ? 1 : 0,
+           (unsigned)(s1 & AT25SF_SR1_BP_MASK), (s1 & AT25SF_SR1_SRP0) ? 1 : 0);
+    printf("SR2      : %02X\n", s2);
+
+    if (id[0] == 0xFF && id[1] == 0xFF && id[2] == 0xFF) {
+        /* SO にはPico側のプルアップを入れてあるので、ICが何も出していないと FF になります。 */
+        printf(" → 全部FFです。ICから返事がありません。\n");
+        printf("   配線（CS、SCK、SI、SO）、ICの電源、ピンの番号（at25sf.h）を確かめてください。\n");
+    } else if (id[0] == 0x00 && id[1] == 0x00 && id[2] == 0x00) {
+        printf(" → 全部00です。SO の線がGNDに触れていないか、ピンの番号（at25sf.h）が合っているかを確かめてください。\n");
+    } else if (!id_ok) {
+        printf(" → IDが違います。返事はありますが、値が化けています。\n");
+        printf("   SPIの速さ（AT25SF_SPI_BAUDRATE）を下げるか、配線を短くしてください。\n");
+    }
+    if (id_ok && (s1 & AT25SF_SR1_BP_MASK)) {
+        printf(" → 保護ビットが立っています。この状態では消去も書き込みもできません。'U' で解除できます。\n");
+    }
+    return id_ok;
+}
+
+/** うまくいかなかったときに、次に確かめる所を表示します。 */
+static void print_hint(AT25SF_result_t r)
+{
+    switch (r) {
+    case AT25SF_OK:
+        break;
+    case AT25SF_ERR_ID:
+        printf(" → ICと通信できていません。配線と電源を確かめ、'i' でIDを見てください。\n");
+        break;
+    case AT25SF_ERR_BUSY:
+        printf(" → 前の書き込み・消去が終わっていません。少し待ってから、やり直してください。\n");
+        break;
+    case AT25SF_ERR_NO_WEL:
+        printf(" → 06h（書き込み許可）が届いていないか、ステータスが読めていません。\n");
+        printf("   SI、SO、SCK、CS の配線を確かめてください。\n");
+        break;
+    case AT25SF_ERR_PROTECTED:
+        printf(" → 'U' で保護を解除してから、やり直してください。\n");
+        break;
+    case AT25SF_ERR_NOT_STARTED:
+        printf(" → 命令が受け付けられていないか、ステータスが正しく読めていません。\n");
+        printf("   SPIの速さ（AT25SF_SPI_BAUDRATE）を下げる、配線を短くする、\n");
+        printf("   HOLD# と WP# を3.3Vにつなぐ、の順に試してください。\n");
+        break;
+    case AT25SF_ERR_TIMEOUT:
+        printf(" → BUSYが外れません。SO の配線と、ICの電源を確かめてください。\n");
+        break;
+    case AT25SF_ERR_PARAM:
+        printf(" → 引数（アドレスや長さ）が範囲の外です。\n");
+        break;
     }
 }
-/*
-試験の形：セクタ消去 → 書く → バッファを0で消す → 読み戻す、の順です。
-全消去（10〜30秒）ではなく4KBの消去（標準55ms）を使うので、何度も試せます。
-読み戻す前にバッファを消すのは、RAMに残った値を見てしまわないためです。
-Page Programは1回に256バイトまでなので、4KBは256バイト×16回に分けて書きます。
-*/
- // 例：4KBのセクタ消去
-bool AT25SF_erase_sector(uint32_t addr)
+
+static void print_stats(void)
 {
-    if (!wait_ready(10 * 1000)) return false;              
- // 前の処理が終わるのを待つ
-    cmd_only(AT25SF_WRITE_ENABLE);
-    cmd_addr(AT25SF_BLOCK_ERASE_4KB, addr);
-    if (!(read_status_register_1() & 0x01)) return false;  
- // BUSYにならない＝受け付けられていない
-    return wait_ready(300 * 1000);                         
- // 最大250ms（p.55）なので300ms
+    log_stats_t st;
+    log_get_stats(&st);
+    printf("記録した件数   : %lu\n", (unsigned long)st.records);
+    printf("書いたページ   : %lu\n", (unsigned long)st.pages_written);
+    printf("捨てたページ   : %lu （0が正常）\n", (unsigned long)st.dropped_pages);
+    printf("書き込みエラー : %lu （0が正常）\n", (unsigned long)st.write_errors);
+    printf("送信の最大     : %lu us\n", (unsigned long)st.max_send_us);
+    printf("BUSYの最大     : %lu us\n", (unsigned long)st.max_busy_us);
+    printf("次のアドレス   : 0x%06lX / 上限 0x%06lX / 消去済み 0x%06lX\n",
+           (unsigned long)st.write_addr, (unsigned long)st.capacity_bytes,
+           (unsigned long)st.erased_until);
+    printf("記録中=%d 満杯=%d\n", st.logging ? 1 : 0, st.full ? 1 : 0);
 }
-// ↓初期化関数の中で呼ぶ全メモリ消去関数
-// ➡毎回電源起動時の初期化で呼んでしまうと、ログのデータを読み出そうと電源
-// を入れた時にログが消えてしまう。
-// ➡SW２を押した時に実行する様に変更。
-bool erase_completed_flag = false;
-// 全消去完了管理フラグ。※書き込む前に全消去する必要がある。
-void AT25SF_erase_all(void);
-void AT25SF_erase_all(void){
- if(get_tactSW2())
- {  
-    uint64_t start_time = time_us_64();
-    uint8_t opecode = AT25SF_CHIP_ERASE_ALL;
+
+static void print_hex(uint32_t addr, const uint8_t *p, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i++) {
+        if (i % 16 == 0) {
+            printf("%06lX :", (unsigned long)(addr + i));
+        }
+        printf(" %02X", p[i]);
+        if (i % 16 == 15) {
+            printf("\n");
+        }
+    }
+}
+
+/* ===== 自己診断 =============================================================
+ * 消す → 読む → 書く → 読み戻す、を順に行い、どこで失敗したかを表示します。
+ * 手順ごとに、確かめられることが1つずつあります。
+ *   消去の後に読んで FF が並ぶ → 消去と読み出しが働いている
+ *   書いた後に読み戻して一致   → 書き込みが働いている
+ * 全消去（10〜30秒）ではなく4KBの消去（標準55ms）を使うので、何度でも試せます。
+ */
+static bool self_test(void)
+{
+    /* 256バイトの配列を2つ使います。関数の中に置くとスタックを使うので、static にしています。 */
+    static uint8_t pattern[AT25SF_PAGE_SIZE];
+    static uint8_t buf[AT25SF_PAGE_SIZE];
+    AT25SF_result_t r;
+    uint64_t t0;
+
+    /* 書く値は 00, 01, 02, … FF。ログと同じ1ページ（256バイト）を、まるごと書いて確かめます。 */
+    for (uint32_t i = 0; i < sizeof(pattern); i++) {
+        pattern[i] = (uint8_t)i;
+    }
+
+    printf("\n--- 自己診断（アドレス 0x%06lX の4KBを使います）---\n", (unsigned long)SELFTEST_ADDR);
+
+    printf("[1] IDとステータス\n");
+    if (!print_id_status()) {
+        printf("    NG（IDが読めていないので、ここで止めます。IDが読めるようになってから、やり直してください）\n");
+        return false;
+    }
+    printf("    OK\n");
+
+    printf("[2] 書き込み許可: 06h を送り、WEL が 1 になるかを見る\n");
     AT25SF_write_enable();
-    AT25SF_send_only_opecode(opecode);
-    // CSピンを High に戻した瞬間にIC内部で自動消去が始まる。
-    // Chip Erase(全ﾒﾓﾘ領域の初期化※全て0xFF=１になる)
-    // 全領域の消去には約10秒程度掛かる見込み
-    while (read_status_is_busy())
-    {   printf("WHILE内BUSY/REDY：%d\n",read_status_is_busy());
-        sleep_ms(1000);
+    uint8_t s = AT25SF_read_status1();
+    bool wel_ok = (s & (AT25SF_SR1_BUSY | AT25SF_SR1_WEL)) == AT25SF_SR1_WEL;
+    printf("    SR1 = %02X → %s\n", s, wel_ok ? "OK" : "NG（06h が届いていないか、ステータスが正しく読めていません）");
+    if (!wel_ok) {
+        return false;
     }
-    uint64_t end_time = time_us_64();
-    uint64_t elapsed_time = end_time - start_time;
-    mesurement_time.chip_erase_time = elapsed_time;
-    #if AT25SF_DEBUG
-    printf("全消去時間：%llu μs\n", elapsed_time);
-    #endif
 
-    erase_completed_flag = true;
-    for(int i=0; i <1000; i++)
-    {
-        beepProcess();
-        out_led2(1);
-        sleep_ms(1);
+    printf("[3] 4KBの消去\n");
+    t0 = time_us_64();
+    r = AT25SF_erase_sector(SELFTEST_ADDR);
+    printf("    結果 = %s、時間 = %lu us（標準55ms、最大250ms）\n", AT25SF_result_name(r),
+           (unsigned long)(time_us_64() - t0));
+    if (r != AT25SF_OK) {
+        print_hint(r);
+        return false;
     }
- }
- else
- {
-  return;
- }
-}
 
-void flash_task(void)   // mainループで毎回呼ぶ。すぐに戻る
-{   
-    if(erase_completed_flag){
-        switch (flash_state) {
-        case FLASH_READY:
-            if ( buf_state >= 0) {
-                if(log_write_1page(buf_state)){
-                    // ↑中でlog_write_1page();を呼べ構造にしたらよいかな。
-                    // それともそのままlog_write_1page()を実行するのは、
-                    // (データ運送係)は main にさせた方が良い？
-                    // WREN → 02h+アドレス+256B（送るだけで待たない）
-                    // log_write_1page()内最後で+256しているが、どちらで
-                    // アドレスを加算するのが良いのだろうか？
-                    // ➡log_write_1pageの中だけにすることに。
-                    buf_state = NOT_READY;
-                    flash_state = FLASH_BUSY;
-                }
-            }
-            break;
-        case FLASH_BUSY:
-            if (!read_status_is_busy()) {   // 1回確かめるだけ
-                flash_state = FLASH_READY;
-            }
-            break;
+    printf("[4] 消去の後に読む（256バイト全部が FF のはず。表示は先頭の16バイト）\n");
+    /* 読む前に、バッファを0で埋めておきます。前の値が残っていると、
+     * 読み出しが失敗していても、合っているように見えてしまうためです。
+     */
+    for (uint32_t i = 0; i < sizeof(buf); i++) {
+        buf[i] = 0x00;
+    }
+    r = AT25SF_read(SELFTEST_ADDR, buf, sizeof(buf));
+    print_hex(SELFTEST_ADDR, buf, 16);
+    if (r != AT25SF_OK) {
+        printf("    NG（読み出し : %s）\n", AT25SF_result_name(r));
+        return false;
+    }
+    for (uint32_t i = 0; i < sizeof(buf); i++) {
+        if (buf[i] != 0xFF) {
+            printf("    NG（%lu バイト目が %02X で、FF になっていません）\n", (unsigned long)i, buf[i]);
+            return false;
         }
     }
-}
+    printf("    OK\n");
 
-// ➡20261115 read関数が純粋なreadになっていないので、
-// 読み出し処理とPCに転送処理に分離したい。
-void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len);
-void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
-{
-    uint8_t opecode = AT25SF_NORMAL_READ;
-    uint32_t read_address = addr; //0000_0000h~3FFFFFh
-    uint8_t tx[4] = {0};
-    tx[0] = opecode;
-    tx[1] = (read_address >> 16) & 0xFF;
-    tx[2] = (read_address >> 8) & 0xFF;
-    tx[3] = read_address;
-    AT25SF_cs_low();
-    spi_write_blocking(AT25SF_SPI_PORT, tx, 4);
-    spi_read_blocking(AT25SF_SPI_PORT, 0x00, buf, len);
-    AT25SF_cs_high();
-}
-
-
-
-// #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
-// #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
-static uint8_t read_buf[4096] = {0};
-// 関数の内側（ローカル変数）で uint8_t tx[65536] と 
-// rx[65536] を取ると、合計約131KBのスタックを消費する。
-// Picoの標準スタック領域（数KB〜数十KB程度）を大きく超えてメモリ破壊を起こす。
-// staticを付けて静的領域なら264KB、65535byte=64KB何とか足りる。
-// ➡が、やはり他のコードの使用する静的領域なども考えると大きすぎる可能性がある。
-// ➡4KB単位か、32KB単位を検討。
-void dump_log_to_pc(uint32_t end_addr);
-// PCへログを一括転送(ダンプ)する関数
-void dump_log_to_pc(uint32_t end_addr)
-{ 
-    uint64_t start_time = time_us_64();
-    printf("=== START DUMP ===\n");
-    // ➡⚠Picoは独立したマイコンであるため、標準のfopen関数などを使っても
-    // PC側のストレージ（Cドライブなど）にはアクセスできない仕組みになっています。
-    // ➡どう記録するか検討。
-    // ◆外部txtファイルに読み出しデータ書き込み処理
-    char filename[64];
-    char time_str[32];
-    FILE *fp;
-    time_t now;
-    struct tm *local_time;
-    // 1. 現在時刻を取得
-    time(&now); //time_t型の変数を引数として渡すと、
-    // 現在のUNIX時間(UTC)を変数に格納してくれる。
-    local_time = localtime(&now);
-    //戻り値はtm型構造体へのポインタ。
-    // この構造体の中に年・月・日・時・分・秒が分解されて格納。
-    // 2. 日時を文字列にフォーマット（例: 20261115_173400）
-    strftime(time_str, sizeof(time_str),
-     "%Y%m%d_%H%M%S", tm);
-    // ◆strftime：日付や時刻のオブジェクトを、指定したフォーマット（形式）の文字列に変換する関数
-    // size_t strftime(char *s, size_t maxsize, const char *format,
-    // const struct tm *timeptr);
-    // • s: 変換された文字列を格納する文字配列（バッファ）のポインタ
-    // • maxsize: 格納する最大バイト数（通常は sizeof(char_array) を指定）
-    // • format: 日付・時刻の書式指定文字列（例: "%Y%m%d_%H%M%S"）
-    // • timeptr: 変換元となる struct tm 構造体のポインタ
-    // 3. ファイル名を組み立てる
-    snprintf(filename, sizeof(filename), "log_%s.txt", time_str);
-    // ◆snprintf：安全にフォーマット済みの文字列を作成する関数
-    // int snprintf(char *str, size_t size, const char *format, ...);
-    // • str : 出力先の文字配列（バッファ）へのポインタ
-    // • size : str に書き込める最大文字数（終端のヌル文字 \0 を含む）
-    // • format : 書式指定文字列（%d, %s など）
-    // • ... : 書式に埋め込む可変長引数
-    // • 戻り値 : 収まりきったかどうかに関わらず、
-    // 本来出力されるはずだった文字数（終端文字を含まない）
-    // 4. ファイルを作成・オープン
-    fp = fopen(filename, "w");
-    if(fp == NULL){
-     perror("logファイルを開けませんでした。");
-     return 1;
+    printf("[5] 1ページ（256バイト）書く\n");
+    t0 = time_us_64();
+    r = AT25SF_page_program(SELFTEST_ADDR, pattern, sizeof(pattern));
+    printf("    結果 = %s、時間 = %lu us（送信の時間を含む。書き込み自体は標準0.4ms、最大3.4ms）\n",
+           AT25SF_result_name(r), (unsigned long)(time_us_64() - t0));
+    if (r != AT25SF_OK) {
+        print_hint(r);
+        return false;
     }
- 
-    for(uint32_t addr = 0; addr < end_addr ; addr += sizeof(read_buf))
-    {
-        uint32_t start_read_block_time = time_us_32();
 
-       size_t read_len 
-       = (end_addr - addr < sizeof(read_buf))
-       ?(end_addr -addr):sizeof(read_buf); 
-       AT25Sf_read(addr, read_buf, read_len);
-       // 読み出した生データをそのままUSBシリアルへ出力
-        fwrite(buf, 1, read_len, stdout);
-     }
-       fflush(stdout);
-       printf("\n=== END DUMP ===\n");
-
-        uint32_t end_read_block_time = time_us_32();
-        uint32_t elapsed_time = 
-        end_read_block_time - start_read_block_time;
-        printf("64kB[%d]読み出しタイム：%lu μs\n", i, elapsed_time);
-        for (uint32_t j = 0; j < 65536; j++){
-           if (){//👈途中
-            // 655536分も読み書きもprintfは多すぎるので、
-            // 1ページの最初の１バイト目だけ読みだす様に変更したい。
-            printf("%dバイト目データ：%d\n",j, read_buf[j]);
-           }
-           // ファイルへの書き込みは全行行う。
-           fprint(fp, "%d\n", read_buf[j]);
+    printf("[6] 読み戻して比べる（表示は先頭の16バイト）\n");
+    for (uint32_t i = 0; i < sizeof(buf); i++) {
+        buf[i] = 0x00;
+    }
+    r = AT25SF_read(SELFTEST_ADDR, buf, sizeof(buf));
+    print_hex(SELFTEST_ADDR, buf, 16);
+    if (r != AT25SF_OK) {
+        printf("    NG（読み出し : %s）\n", AT25SF_result_name(r));
+        return false;
+    }
+    for (uint32_t i = 0; i < sizeof(buf); i++) {
+        if (buf[i] != pattern[i]) {
+            printf("    NG（%lu バイト目が違います。書いた値 %02X、読んだ値 %02X）\n", (unsigned long)i,
+                   pattern[i], buf[i]);
+            return false;
         }
-        fclose(fp);
-        printf("作成されたファイル名: %s\n", filename);
     }
-    uint64_t end_time = time_us_64();
-    uint64_t total_elapsed_time = end_time - start_time;
-    mesurement_time.read_time = total_elapsed_time;
-    #if AT25SF_DEBUG
-    printf("全読み込み時間：%llu μs\n", total_elapsed_time);
-    #endif
+    printf("    OK\n");
+    return true;
 }
 
-static volatile uint32_t log_count = 0;
-// 1. タイマー割り込みで呼ばれるコールバック関数
-bool timer_1ms_callback(struct repeating_timer *t) {
-    log_put(); // 1msごとにログ詰め込みを実行
-    log_count++;
-    return log_count < 1024;   
- // 1024件以上になったらfalseを返してタイマ割込みを止める
- // ＝ちょうど64ページで止まる
-}
-
-
-void AT25SF_init(void); 
-//この名前だと最初の初期化処理もするみたいに見えるな
-
-void AT25SF_init(void) {
-    spi_init(AT25SF_SPI_PORT, AT25SF_SPI_BAUDRATE);
-    spi_set_format(
-        AT25SF_SPI_PORT, 8, SPI_CPOL_0
-        , SPI_CPHA_0, SPI_MSB_FIRST);
-        
-    gpio_set_function(AT25SF_PIN_SI, GPIO_FUNC_SPI);
-    gpio_set_function(AT25SF_PIN_SO, GPIO_FUNC_SPI);
-    gpio_set_function(AT25SF_PIN_SCK,  GPIO_FUNC_SPI);
-
-    gpio_init(AT25SF_PIN_CS);
-    gpio_set_dir(AT25SF_PIN_CS, GPIO_OUT);
-    gpio_put(AT25SF_PIN_CS, 1);
-
-    AT25SF_read_jedec_id();
- // 初期化処理時に通信テストとして、JEDEC_IDを読み出す処理を行う。
-}
-void AT25_hardware_setup(void)
+/* ===== 照合 =================================================================
+ * 'l' で書いた記録を1件ずつ読み戻し、書いた値（固定のダミー値と連番）と比べます。
+ * 1000行のCSVを目で追わなくても、抜けや重なり、値の化けが無いかが分かります。
+ */
+static void verify_test_log(void)
 {
-  gpio_set_function(10, GPIO_FUNC_SIO);
-  gpio_set_function(12, GPIO_FUNC_SIO);
-  gpio_set_function(13, GPIO_FUNC_SIO);
-  gpio_set_function(15, GPIO_FUNC_SIO);
-  gpio_set_dir(10, GPIO_OUT);
-  gpio_set_dir(12, GPIO_OUT);
- // Picoボード上のSW0の入力を受け付けるための準備
-  gpio_set_dir(13, GPIO_IN);
-  gpio_set_dir(15, GPIO_IN);
-  // SWに接続されているGPIOのpull up抵抗をONに。
-  gpio_pull_up(13);
-  gpio_pull_up(15);
+    uint32_t errors = 0;
+
+    for (uint32_t i = 0; i < TEST_RECORDS; i++) {
+        Sensors_data_t r;
+        if (!log_read_record(i, &r)) {
+            printf("NG : %lu 件目が読めません（書かれていないか、ICと通信できていません）。\n", (unsigned long)i);
+            errors++;
+            break;
+        }
+        bool same = r.sensor_displacement == test_pattern.sensor_displacement &&
+                    r.sensor_binary == test_pattern.sensor_binary &&
+                    r.target_speed == test_pattern.target_speed &&
+                    r.left_speed == test_pattern.left_speed &&
+                    r.right_speed == test_pattern.right_speed &&
+                    r.left_motor_duty == test_pattern.left_motor_duty &&
+                    r.right_motor_duty == test_pattern.right_motor_duty &&
+                    r.target_angular_velocity == test_pattern.target_angular_velocity &&
+                    r.now_angular_velocity == test_pattern.now_angular_velocity;
+        if (!same || r.vcc_mv != (uint16_t)i) {
+            if (errors < 5) { /* 表示が流れすぎないように、最初の5件だけ出す */
+                printf("NG : %lu 件目  連番=%u（期待 %lu）、固定値=%s\n", (unsigned long)i,
+                       (unsigned)r.vcc_mv, (unsigned long)i, same ? "一致" : "不一致");
+            }
+            errors++;
+        }
+    }
+
+    /* 最後の記録の次は、書いていない（全部 FF の）はずです。 */
+    Sensors_data_t next;
+    if (errors == 0 && log_read_record(TEST_RECORDS, &next)) {
+        printf("NG : %lu 件目に、余分な記録があります。\n", (unsigned long)TEST_RECORDS);
+        errors++;
+    }
+
+    if (errors == 0) {
+        printf("照合 : OK（%lu件、連番に抜けも重なりも無く、固定値もすべて一致）\n",
+               (unsigned long)TEST_RECORDS);
+    } else {
+        printf("照合 : NG（合わなかった件数 %lu）。's' で、捨てたページが無いかを見てください。\n",
+               (unsigned long)errors);
+    }
 }
 
-int main()
+/* ===== main ================================================================= */
+
+int main(void)
 {
     stdio_init_all();
-    AT25_hardware_setup();
-    initBeep();
-    AT25SF_init();
+    sleep_ms(2000); /* PCのシリアルモニタがつながるのを、少し待つ */
 
-    struct repeating_timer timer;
+    AT25SF_result_t r = log_init();
+    printf("\nAT25SF321B フラッシュログ 試験プログラム\n");
+    printf("初期化 : %s\n", AT25SF_result_name(r));
+    print_help();
 
-    while (true) { 
-        AT25SF_erase_all();
-        printf("SW0: %d\n", get_tactSW0());
-        printf("SW2: %d\n", get_tactSW2());
-        if(!get_tactSW0()){
-            AT25SF_read(0x00000000, read_buf, 65536);
+    while (true) {
+        /* PCから1文字来ているかを見ます。0 を指定すると、待たずにすぐ戻ります。
+         * 何も来ていなければ、負の値（PICO_ERROR_TIMEOUT）が返ります。
+         */
+        int ch = getchar_timeout_us(0);
+
+        /* 記録中は、コマンドを受け付けません。
+         * コマンドの処理（長い表示や、SPIを使う読み出し）でmainのループが止まると、
+         * その間 flash_task を呼べず、書き込みが間に合わなくなるためです。
+         * 状態の表示（'s'）も、数百バイトの printf で数ms〜数十ms止まるので、同じ扱いにしています。
+         */
+        if (test_running && ch >= 0 && ch != '\r' && ch != '\n') {
+            printf("記録中です。\n");
+            ch = PICO_ERROR_TIMEOUT;
         }
-        if (erase_completed_flag){
-             add_repeating_timer_ms(-1, timer_1ms_callback, NULL, &timer);
-          // -1ms を指定して、きっかり1ms周期で割り込みを開始する
-         erase_completed_flag = false;
+
+        switch (ch) {
+        case 'h':
+            print_help();
+            break;
+        case 'i':
+            print_id_status();
+            break;
+        case 't':
+            printf("自己診断 : %s\n", self_test() ? "合格" : "不合格");
+            break;
+        case 'e': {
+            printf("消去します（%lu バイト分）...\n", (unsigned long)TEST_ERASE_BYTES);
+            uint64_t t0 = time_us_64();
+            AT25SF_result_t er = log_erase(TEST_ERASE_BYTES);
+            printf("消去 : %s、時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
+            print_hint(er);
+            break;
         }
+        case 'l':
+            test_log_start();
+            break;
+        case 'v':
+            verify_test_log();
+            break;
+        case 'd':
+            log_dump();
+            break;
+        case 's':
+            print_stats();
+            break;
+        case 'r': {
+            static uint8_t head[64];
+            AT25SF_result_t rr = AT25SF_read(0, head, sizeof(head));
+            if (rr == AT25SF_OK) {
+                print_hex(0, head, sizeof(head));
+            } else {
+                printf("読み出し : %s\n", AT25SF_result_name(rr));
+                print_hint(rr);
+            }
+            break;
+        }
+        case 'U': {
+            AT25SF_result_t ur = AT25SF_unprotect();
+            printf("保護の解除 : %s\n", AT25SF_result_name(ur));
+            print_hint(ur);
+            print_id_status();
+            break;
+        }
+        case 'C': {
+            printf("チップ全体を消去します。10〜30秒かかります...\n");
+            uint64_t t0 = time_us_64();
+            AT25SF_result_t er = AT25SF_erase_chip();
+            printf("全消去 : %s、時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
+            print_hint(er);
+            if (er == AT25SF_OK) {
+                printf("ログを記録する前に、もう一度 'e' を送ってください。\n");
+            }
+            break;
+        }
+        default:
+            break; /* 何も来ていない、または知らない文字 */
+        }
+
+        /* 札の付いたページがあれば、フラッシュに書きます。毎回呼びます。 */
         flash_task();
-        sleep_us(1);
+
+        /* タイマーからの合図を見て、記録を止めます。 */
+        if (test_finished) {
+            test_finished = false;
+            bool ok = log_stop();
+            test_running = false;
+            printf("記録が終わりました : %s\n", ok ? "OK" : "NG");
+            print_stats();
+            printf("'v' で照合、'd' でCSVを出せます。\n");
+        }
     }
 }

@@ -36,10 +36,10 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(
-    Sample_AT25SF321B_SPI_Flash_Memory 
-    Sample_AT25SF321B_SPI_Flash_Memory.c 
-    buzzer/buzzer.c
-    pico_led_sw/pico_led_sw.c
+    Sample_AT25SF321B_SPI_Flash_Memory
+    Sample_AT25SF321B_SPI_Flash_Memory.c    
+    flash_log/flash_log.c
+    at25sf/at25sf.c
     )
 
 pico_set_program_name(Sample_AT25SF321B_SPI_Flash_Memory "Sample_AT25SF321B_SPI_Flash_Memory")
