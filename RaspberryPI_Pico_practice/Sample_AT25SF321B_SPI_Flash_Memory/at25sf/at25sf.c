@@ -36,8 +36,19 @@
  *   このファイルは printf を使いません。表示するかどうかは、使う側が決めます。
  *   頻繁に呼ばれる関数（BUSYの確認など）の中で表示すると、その時間だけ処理が止まり、
  *   時間の計測も狂うためです。
+ *
+ * ■ 11/16の実機テストの後で直した所
+ *   実機で、64KBの消去の次の消去が ERR_BUSY で止まりました（始めてから約20ms後）。
+ *   「終わった」と読めた直後に、ICが「まだ処理中」と答えた、ということです。
+ *   どちらの読み取りが違っていたのかは、1回の結果からは決められません。
+ *   そこで、どちらの場合でも先へ進めるように、次の3つを直しました。
+ *     (1) CSをHIGHに戻すときの時間を確保する            → cs_high
+ *     (2) 「終わった」は、2回続けて読めたときだけにする  → wait_bits_clear
+ *     (3) 待ち終えた直後に BUSY=1 と読めたら、待ち直す    → ready_and_enable
+ *   あわせて、起きた回数と、そのとき読んだ値を数えるようにしました（AT25SF_get_diag）。
+ *   数が 0 でなければ、どちらが起きたのかを、値から見分けられます。
  */
-#include "at25sf/at25sf.h"
+#include "at25sf.h"
 
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
@@ -68,14 +79,60 @@
 #define TIMEOUT_CHIP_US      (40u * 1000u * 1000u)  /* 全消去          最大30秒  */
 #define TIMEOUT_PREV_US      (1000u * 1000u)        /* 前の処理が終わるのを待つ上限 */
 
+/* CSをHIGHにした後、そのまま待つ時間 [µs]。理由は、下の cs_high の説明にあります。 */
+#define CS_HIGH_WAIT_US 2u
+
 static uint32_t actual_baudrate = 0;
+
+/* 調子を見るための数です。このファイルの関数は main の側からしか呼ばないので、
+ * 割り込みと取り合いになることはなく、volatile は要りません。
+ */
+static AT25SF_diag_t diag;
+
+/** エラーを返すときに、判定に使った SR1 の値を覚えておきます（後で表示して、原因を探すため）。 */
+static AT25SF_result_t fail(AT25SF_result_t r, uint8_t sr1)
+{
+    diag.error_sr1 = sr1;
+    return r;
+}
 
 /* ===== CS ====================================================================
  * ICは、CSがLOWの間に届いたバイトを、ひとつながりの命令として受け取ります。
  * そして、CSがHIGHに戻った瞬間に、その命令を実行します。
+ *
+ * CSをHIGHに戻すときに、2つのことをしています。
+ *
+ * (1) SPIが最後のビットを送り終えるのを待ってから、HIGHにする
+ *     SDKの spi_read_blocking は、最後の1バイトを受け取った時点で戻ってきます。
+ *     送り終わるのを待ってから戻る spi_write_blocking とは、ここが違います
+ *     （SDKのソース hardware_spi/spi.c で確かめました）。
+ *     受け取った時点では、クロックの最後の1周期がまだ終わっていないことがあるので、
+ *     待たずにHIGHにすると、クロックが動いている途中でCSが上がります。
+ *
+ * (2) HIGHにした後、1µs以上そのままにする
+ *     ICは、CSがHIGHになったのを見て「命令が終わった」と判断します。
+ *     必要な時間は、データシートでは20ns以上です（13.3 の tCSH）。
+ *     最適化したビルドでは、cs_high() と次の cs_low() の間が数命令（数十ns）しか
+ *     離れません（ビルドした機械語で確かめました）。計算上は足りる値ですが、配線が長いと
+ *     波形がなまり、ICに届くHIGHの時間はこれより短くなります。ICがHIGHを見落とすと、
+ *     2つの命令が1つにつながり、後ろの命令（ステータスの読み出しなど）に答えが返りません。
+ *     余裕が小さいので、1µs以上に広げました。
+ *
+ *     busy_wait_us_32(2) と、2 を指定しているのは、この関数が「1µs刻みの時計が、
+ *     指定した数だけ進むまで」待つためです。1 だと、時計が進む直前に呼んだとき、
+ *     ほとんど待たずに戻ります。2 なら、短くても1µsになります。
+ *     1ページを書くのに使う命令は3〜4個なので、増える時間は合わせて10µsほどです。
  */
-static inline void cs_low(void)  { gpio_put(AT25SF_PIN_CS, 0); }
-static inline void cs_high(void) { gpio_put(AT25SF_PIN_CS, 1); }
+static inline void cs_low(void) { gpio_put(AT25SF_PIN_CS, 0); }
+
+static void cs_high(void)
+{
+    while (spi_is_busy(AT25SF_SPI_PORT)) {
+        tight_loop_contents(); /* (1) 最後のビットを送り終えるのを待つ */
+    }
+    gpio_put(AT25SF_PIN_CS, 1);
+    busy_wait_us_32(CS_HIGH_WAIT_US); /* (2) HIGHのまま待つ */
+}
 
 /** オペコードと24ビットのアドレスを、送る順（上位のバイトから）に並べます。 */
 static void make_head(uint8_t head[4], uint8_t op, uint32_t addr)
@@ -251,15 +308,71 @@ bool AT25SF_is_busy(void)
     return (AT25SF_read_status1() & AT25SF_SR1_BUSY) != 0;
 }
 
-AT25SF_result_t AT25SF_wait_ready(uint32_t timeout_us)
+/* ===== 終わるのを待つ ========================================================
+ * SR1 の mask のビットが全部 0 と、「2回続けて」読めるまで待ちます。
+ *
+ * 2回にしているのは、1回の読み取りを、そのまま信じないためです。
+ * 「BUSY=0 と1回読めたら終わり」という作りだと、読み間違いが1回あっただけで、
+ * 処理の途中で先へ進んでしまいます（11/16の実機の結果は、これでも説明がつきます。
+ * ただし、原因がこれだと決まったわけではありません）。
+ * 増える時間は、ステータスを1回読む分（1MHzで約20µs）です。
+ */
+static AT25SF_result_t wait_bits_clear(uint8_t mask, uint32_t timeout_us)
 {
-    uint64_t start = time_us_64();
-    while (AT25SF_is_busy()) {
+    const uint64_t start = time_us_64();
+    unsigned clear_count = 0;     /* mask のビットが全部 0 と、続けて読めた回数 */
+    bool     idle_before = false; /* 1つ前に読んだとき、BUSY=0 だった           */
+    uint8_t  idle_sr1 = 0;        /* そのときの SR1                             */
+
+    for (;;) {
+        const uint8_t s = AT25SF_read_status1();
+
+        if (s & AT25SF_SR1_BUSY) {
+            if (idle_before) {
+                /* さっきは BUSY=0 と読めたのに、今度は BUSY=1 です。
+                 * どちらかが読み間違いか、ICの中の状態が行き来したかです。数えておきます。
+                 */
+                diag.busy_again++;
+                diag.busy_again_sr1 = idle_sr1;
+            }
+            idle_before = false;
+        } else {
+            idle_before = true;
+            idle_sr1 = s;
+        }
+
+        if ((s & mask) == 0) {
+            clear_count++;
+            if (clear_count >= 2) {
+                return AT25SF_OK;
+            }
+            continue; /* 1回目。時間切れを見る前に、すぐもう1回読む */
+        }
+        clear_count = 0;
+
         if (time_us_64() - start > timeout_us) {
-            return AT25SF_ERR_TIMEOUT;
+            /* BUSY は 0 なのに WEL が 1 のまま残っているときは、命令が実行されていません
+             * （実行された書き込みや消去は、終わると WEL を 0 に戻します）。
+             */
+            return fail((s & AT25SF_SR1_BUSY) ? AT25SF_ERR_TIMEOUT : AT25SF_ERR_NOT_STARTED, s);
         }
     }
-    return AT25SF_OK;
+}
+
+/** BUSY が外れるまで待ちます（前の処理が残っていないかを確かめるときに使います）。 */
+AT25SF_result_t AT25SF_wait_ready(uint32_t timeout_us)
+{
+    return wait_bits_clear(AT25SF_SR1_BUSY, timeout_us);
+}
+
+/** 書き込み・消去の命令を送った後、それが終わるまで待ちます。
+ *  BUSY だけでなく、WEL も 0 に戻ったことを見ます。ICは、書き込みや消去が終わると
+ *  WEL を 0 に戻すので（データシート 11.1.3）、2つのビットを合わせて見ると、
+ *  「途中なのに BUSY=0 と読めただけ」の場合を、見分けやすくなります。
+ */
+static AT25SF_result_t wait_done(uint32_t timeout_us)
+{
+    return wait_bits_clear(AT25SF_SR1_BUSY | AT25SF_SR1_WEL, timeout_us);
 }
 
 void AT25SF_write_enable(void)
@@ -280,17 +393,58 @@ void AT25SF_write_enable(void)
 static AT25SF_result_t write_enable_checked(bool allow_protected)
 {
     send_op(OP_WRITE_ENABLE);
-    uint8_t s = AT25SF_read_status1();
+    const uint8_t s = AT25SF_read_status1();
     if (s & AT25SF_SR1_BUSY) {
-        return AT25SF_ERR_BUSY; /* BUSYの間は、06h も無視される */
+        /* BUSYの間は、06h も無視されます。
+         * この関数は「前の処理が終わった」と分かってから呼ぶので、ここに来るのは、
+         * その判断か、今の読み取りの、どちらかが違っていたときです。
+         * 読んだ値が FF なら、ICが答えていません（線が浮いて、プルアップの値が読めている）。
+         * 03 なら、ICは本当に処理中です（前の「終わった」が早すぎた）。
+         */
+        diag.wren_busy++;
+        diag.wren_busy_sr1 = s;
+        return fail(AT25SF_ERR_BUSY, s);
     }
     if (!(s & AT25SF_SR1_WEL)) {
-        return AT25SF_ERR_NO_WEL;
+        return fail(AT25SF_ERR_NO_WEL, s);
     }
     if (!allow_protected && (s & AT25SF_SR1_BP_MASK)) {
-        return AT25SF_ERR_PROTECTED;
+        return fail(AT25SF_ERR_PROTECTED, s);
     }
     return AT25SF_OK;
+}
+
+/** 「待つ → 許可」をまとめた手順です。終わるまで待つ形の書き込み・消去・保護の解除で使います。
+ *
+ *  待ち終えた直後なのに、許可の確認で BUSY=1 と読めたときは、エラーにせず、
+ *  待つところからやり直します。ICが「まだ処理中」と答えているなら、待てば済むからです。
+ *  やり直しは TIMEOUT_PREV_US までで、それでもだめなら AT25SF_ERR_BUSY を返します。
+ *  （待たない形の AT25SF_page_program_start は、ここを通りません。あちらは
+ *    AT25SF_ERR_BUSY をそのまま返し、呼ぶ側の flash_task が、次の周でやり直します）
+ */
+static AT25SF_result_t ready_and_enable(bool allow_protected)
+{
+    const uint64_t start = time_us_64();
+    for (;;) {
+        AT25SF_result_t r = AT25SF_wait_ready(TIMEOUT_PREV_US);
+        if (r != AT25SF_OK) {
+            return r;
+        }
+        r = write_enable_checked(allow_protected);
+        if (r != AT25SF_ERR_BUSY) {
+            return r; /* OK も、BUSY以外のエラーも、そのまま返す */
+        }
+        if (time_us_64() - start > TIMEOUT_PREV_US) {
+            return r;
+        }
+    }
+}
+
+void AT25SF_get_diag(AT25SF_diag_t *out)
+{
+    if (out != NULL) {
+        *out = diag;
+    }
 }
 
 /* ===== 読み出し ============================================================= */
@@ -305,9 +459,14 @@ AT25SF_result_t AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     }
     /* 書き込み・消去の最中に読むと、正しい値が返りません。
      * 気づかないまま「読んだ値がおかしい」と悩まないように、ここで止めます。
+     * BUSY=1 と読めたときは、もう1回読んで確かめます（1回の読み間違いで止まらないため）。
      */
-    if (AT25SF_is_busy()) {
-        return AT25SF_ERR_BUSY;
+    uint8_t s = AT25SF_read_status1();
+    if (s & AT25SF_SR1_BUSY) {
+        s = AT25SF_read_status1();
+        if (s & AT25SF_SR1_BUSY) {
+            return fail(AT25SF_ERR_BUSY, s);
+        }
     }
     send_op_addr_read(OP_READ_DATA, addr, buf, len);
     return AT25SF_OK;
@@ -315,13 +474,19 @@ AT25SF_result_t AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
 
 /* ===== 書き込み ============================================================= */
 
+/** ページ書き込みの引数を確かめます。
+ *  ページの境界をまたぐと、同じページの先頭に戻って上書きされてしまいます。
+ *  送る前に、ここで止めます。(addr & 0xFF) は、ページの中での位置です。
+ */
+static bool page_param_ok(uint32_t addr, const uint8_t *data, size_t len)
+{
+    return data != NULL && len != 0 && addr < AT25SF_TOTAL_SIZE &&
+           (addr & (AT25SF_PAGE_SIZE - 1)) + len <= AT25SF_PAGE_SIZE;
+}
+
 AT25SF_result_t AT25SF_page_program_start(uint32_t addr, const uint8_t *data, size_t len)
 {
-    /* ページの境界をまたぐと、同じページの先頭に戻って上書きされてしまいます。
-     * 送る前に、ここで止めます。(addr & 0xFF) は、ページの中での位置です。
-     */
-    if (data == NULL || len == 0 || addr >= AT25SF_TOTAL_SIZE ||
-        (addr & (AT25SF_PAGE_SIZE - 1)) + len > AT25SF_PAGE_SIZE) {
+    if (!page_param_ok(addr, data, len)) {
         return AT25SF_ERR_PARAM;
     }
     AT25SF_result_t r = write_enable_checked(false);
@@ -334,31 +499,22 @@ AT25SF_result_t AT25SF_page_program_start(uint32_t addr, const uint8_t *data, si
 
 AT25SF_result_t AT25SF_page_program(uint32_t addr, const uint8_t *data, size_t len)
 {
+    if (!page_param_ok(addr, data, len)) {
+        return AT25SF_ERR_PARAM;
+    }
     /* 「待つ → 許可 → 命令 → 待つ」の順です。
      * 前の処理が終わっていないと、次の命令は無視されるので、先に待ちます。
      */
-    AT25SF_result_t r = AT25SF_wait_ready(TIMEOUT_PREV_US);
+    AT25SF_result_t r = ready_and_enable(false);
     if (r != AT25SF_OK) {
         return r;
     }
-    r = AT25SF_page_program_start(addr, data, len);
-    if (r != AT25SF_OK) {
-        return r;
-    }
-    bool started = AT25SF_is_busy();
-    r = AT25SF_wait_ready(TIMEOUT_PAGE_US);
-    if (r != AT25SF_OK) {
-        return r;
-    }
-    /* 一度もBUSYにならず、WELも1のまま残っていたら、命令は受け付けられていません
-     * （受け付けられた書き込みは、終わるとWELを0に戻します）。
-     * 数バイトの書き込みは数十µsで終わり、BUSYを見る前に終わることがあるので、
-     * WELと合わせて判定します。
+    send_op_addr_write(OP_PAGE_PROGRAM, addr, data, len);
+    /* 書き終わると、BUSY も WEL も 0 になります。
+     * 命令が受け付けられなかったときは、BUSY にならず、WEL が 1 のまま残ります。
+     * その場合は、上限時間の後に AT25SF_ERR_NOT_STARTED が返ります。
      */
-    if (!started && (AT25SF_read_status1() & AT25SF_SR1_WEL)) {
-        return AT25SF_ERR_NOT_STARTED;
-    }
-    return AT25SF_OK;
+    return wait_done(TIMEOUT_PAGE_US);
 }
 
 /* ===== 消去 ================================================================= */
@@ -366,11 +522,7 @@ AT25SF_result_t AT25SF_page_program(uint32_t addr, const uint8_t *data, size_t l
 /** 3種類の消去に共通の手順（待つ → 許可 → 命令 → 待つ）。違うのは命令と上限時間だけ。 */
 static AT25SF_result_t erase_common(uint8_t op, bool with_addr, uint32_t addr, uint32_t timeout_us)
 {
-    AT25SF_result_t r = AT25SF_wait_ready(TIMEOUT_PREV_US);
-    if (r != AT25SF_OK) {
-        return r;
-    }
-    r = write_enable_checked(false);
+    AT25SF_result_t r = ready_and_enable(false);
     if (r != AT25SF_OK) {
         return r;
     }
@@ -384,11 +536,16 @@ static AT25SF_result_t erase_common(uint8_t op, bool with_addr, uint32_t addr, u
      * これを確かめないと、「消したつもりで消えていない」まま先へ進んでしまいます。
      * 11/13の実機の結果（全消去時間がすぐに出る）は、この確認に引っかかる状態です。
      * どこで止まったかは、main.c の自己診断の表示で切り分けます。
+     * BUSY=0 と読めたときは、もう1回読んで確かめます（1回の読み間違いで止まらないため）。
      */
-    if (!AT25SF_is_busy()) {
-        return AT25SF_ERR_NOT_STARTED;
+    uint8_t s = AT25SF_read_status1();
+    if (!(s & AT25SF_SR1_BUSY)) {
+        s = AT25SF_read_status1();
+        if (!(s & AT25SF_SR1_BUSY)) {
+            return fail(AT25SF_ERR_NOT_STARTED, s);
+        }
     }
-    return AT25SF_wait_ready(timeout_us);
+    return wait_done(timeout_us);
 }
 
 AT25SF_result_t AT25SF_erase_sector(uint32_t addr)
@@ -416,23 +573,20 @@ AT25SF_result_t AT25SF_erase_chip(void)
 
 AT25SF_result_t AT25SF_unprotect(void)
 {
-    AT25SF_result_t r = AT25SF_wait_ready(TIMEOUT_PREV_US);
-    if (r != AT25SF_OK) {
-        return r;
-    }
-    r = write_enable_checked(true); /* 保護されていても送る（解除するための命令なので） */
+    AT25SF_result_t r = ready_and_enable(true); /* 保護されていても送る（解除するための命令なので） */
     if (r != AT25SF_OK) {
         return r;
     }
     const uint8_t value = 0x00; /* BP0〜BP4 と SRP0 を全部 0 に */
     send_op_write(OP_WRITE_STATUS1, &value, 1);
-    r = AT25SF_wait_ready(TIMEOUT_WRSR_US);
+    r = wait_done(TIMEOUT_WRSR_US);
     if (r != AT25SF_OK) {
         return r;
     }
     /* 書けたかどうかを、読み戻して確かめます。 */
-    if (AT25SF_read_status1() & AT25SF_SR1_BP_MASK) {
-        return AT25SF_ERR_NOT_STARTED;
+    const uint8_t s = AT25SF_read_status1();
+    if (s & AT25SF_SR1_BP_MASK) {
+        return fail(AT25SF_ERR_NOT_STARTED, s);
     }
     return AT25SF_OK;
 }

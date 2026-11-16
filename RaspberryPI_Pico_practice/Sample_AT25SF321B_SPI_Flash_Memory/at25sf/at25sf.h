@@ -139,7 +139,10 @@ uint8_t AT25SF_read_status2(void);
 /** 書き込み・消去の最中なら true。 */
 bool AT25SF_is_busy(void);
 
-/** BUSY が外れるまで待ちます。timeout_us を過ぎたら AT25SF_ERR_TIMEOUT。 */
+/**
+ * BUSY が外れるまで待ちます。timeout_us を過ぎたら AT25SF_ERR_TIMEOUT。
+ * 1回の読み間違いで先へ進まないように、BUSY=0 と2回続けて読めたら「外れた」と判断します。
+ */
 AT25SF_result_t AT25SF_wait_ready(uint32_t timeout_us);
 
 /** 書き込み許可（06h）を送ります。確認用に公開しています（ふだんは下の関数が中で呼びます）。 */
@@ -175,6 +178,26 @@ AT25SF_result_t AT25SF_page_program_start(uint32_t addr, const uint8_t *data, si
 AT25SF_result_t AT25SF_erase_sector(uint32_t addr); /* 4KB  : 標準55ms、 最大250ms */
 AT25SF_result_t AT25SF_erase_block(uint32_t addr);  /* 64KB : 標準200ms、最大700ms */
 AT25SF_result_t AT25SF_erase_chip(void);            /* 全体 : 標準10秒、 最大30秒  */
+
+/* ===== 調子を見るための数 ===================================================
+ * ステータスの読み取りが、つじつまの合わない動きをした回数です。どちらも 0 が正常です。
+ * 0 でなくても、ドライバは待ち直して先へ進みます。ただ、配線やICの様子を
+ * 調べたほうがよい合図なので、数えて、読めるようにしてあります。
+ * 一緒に覚えている SR1 の値で、何が起きたかを見分けられます。
+ *   FF     … ICが答えていない（線が浮いて、Pico側のプルアップの値が読めている）
+ *   03     … ICは本当に処理中だった（その前の「終わった」という判断が早すぎた）
+ *   00, 02 … BUSY=0 と読めたのに、次に読むと BUSY=1 だった
+ */
+typedef struct {
+    uint32_t wren_busy;      /* 「終わった」と判断した後、06h に続くステータスが BUSY=1 だった回数    */
+    uint32_t busy_again;     /* 待っている間に、BUSY=0 と読めた後で、また BUSY=1 と読めた回数          */
+    uint8_t  wren_busy_sr1;  /* wren_busy を最後に数えたときに読んだ SR1                              */
+    uint8_t  busy_again_sr1; /* busy_again を最後に数えたときの、BUSY=0 と読めた方の SR1               */
+    uint8_t  error_sr1;      /* 最後にエラーを返したとき、判定に使った SR1                            */
+} AT25SF_diag_t;
+
+/** 上の数を out に入れます。数は、電源を入れてからの合計です。 */
+void AT25SF_get_diag(AT25SF_diag_t *out);
 
 /* ===== 保護の解除 ===========================================================
  * ステータスレジスタ1に 0x00 を書き、保護ビット（BP0〜BP4）を全部 0 にします。
