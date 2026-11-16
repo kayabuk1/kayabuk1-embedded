@@ -29,14 +29,17 @@
 
 #include "pico/stdlib.h"
 
-#include "at25sf/at25sf.h"
-#include "flash_log/flash_log.h"
+#include "at25sf.h"
+#include "flash_log.h"
 
 /* 1000件 = 1秒分。16件で1ページなので、62ページと8件になります。
  * わざと半端な数にして、最後の「詰めかけのページ」を書く処理（log_stop）も確かめます。
  */
 #define TEST_RECORDS     1000u
-#define TEST_ERASE_BYTES AT25SF_BLOCK_SIZE /* 64KB = 約4秒分。消去は約0.3秒 */
+#define TEST_ERASE_BYTES AT25SF_BLOCK_SIZE /* 64KB = 約4秒分。消去は、データシートの標準で約0.3秒 */
+/* 11/16の実機では、何も書いていない所の消去は、ずっと短く終わりました（4KBで約0.6ms、
+ * 64KB+4KBで約8ms）。書いてある所の4KBの消去は、約27msでした。
+ */
 
 /* 自己診断で使う場所。ログ（先頭から使う）と重ならないように、いちばん最後の4KBを使います。 */
 #define SELFTEST_ADDR (AT25SF_TOTAL_SIZE - AT25SF_SECTOR_SIZE)
@@ -159,9 +162,42 @@ static bool print_id_status(void)
     return id_ok;
 }
 
+/** ドライバが数えている「つじつまの合わない読み取り」の回数を表示します。
+ *  どちらも 0 が正常です。0 でなくても、ドライバは待ち直して先へ進みますが、
+ *  配線やICの様子を調べる手がかりになるので、結果と一緒に出します。
+ *  （11/16の実機テストで、消去が ERR_BUSY で止まったことを受けて足しました）
+ */
+static void print_diag(void)
+{
+    AT25SF_diag_t d;
+    AT25SF_get_diag(&d);
+    printf("読み直し       : 06hの後にBUSY %lu回", (unsigned long)d.wren_busy);
+    if (d.wren_busy != 0) {
+        printf("（SR1=%02X）", d.wren_busy_sr1);
+    }
+    printf("、BUSYの戻り %lu回", (unsigned long)d.busy_again);
+    if (d.busy_again != 0) {
+        printf("（SR1=%02X）", d.busy_again_sr1);
+    }
+    printf(" （0が正常。電源を入れてからの合計）\n");
+    if (d.wren_busy != 0 || d.busy_again != 0) {
+        printf(" → 0でない数があります。ドライバは待ち直して先へ進んでいますが、この行を控えておいてください。\n");
+        printf("   SR1=FF : ICが答えていない / 03 : 前の処理がまだ続いていた / 00,02 : 途中で BUSY=0 と読めた\n");
+    }
+}
+
 /** うまくいかなかったときに、次に確かめる所を表示します。 */
 static void print_hint(AT25SF_result_t r)
 {
+    /* ステータスを見て判定したエラーのときは、そのとき読んだ値も出します。
+     * FF なら「ICが答えていない」、03 なら「ICは本当に処理中」と、原因を分けられます。
+     */
+    if (r == AT25SF_ERR_BUSY || r == AT25SF_ERR_NO_WEL || r == AT25SF_ERR_PROTECTED ||
+        r == AT25SF_ERR_NOT_STARTED || r == AT25SF_ERR_TIMEOUT) {
+        AT25SF_diag_t d;
+        AT25SF_get_diag(&d);
+        printf(" → 判定に使った SR1 = %02X\n", d.error_sr1);
+    }
     switch (r) {
     case AT25SF_OK:
         break;
@@ -169,7 +205,8 @@ static void print_hint(AT25SF_result_t r)
         printf(" → ICと通信できていません。配線と電源を確かめ、'i' でIDを見てください。\n");
         break;
     case AT25SF_ERR_BUSY:
-        printf(" → 前の書き込み・消去が終わっていません。少し待ってから、やり直してください。\n");
+        printf(" → ICが「まだ処理中」と答えています（ドライバは、1秒まで待ち直しています）。\n");
+        printf("   上の SR1 が FF なら、ICが答えていません。配線と、ICの電源を確かめてください。\n");
         break;
     case AT25SF_ERR_NO_WEL:
         printf(" → 06h（書き込み許可）が届いていないか、ステータスが読めていません。\n");
@@ -206,6 +243,7 @@ static void print_stats(void)
            (unsigned long)st.write_addr, (unsigned long)st.capacity_bytes,
            (unsigned long)st.erased_until);
     printf("記録中=%d 満杯=%d\n", st.logging ? 1 : 0, st.full ? 1 : 0);
+    print_diag();
 }
 
 static void print_hex(uint32_t addr, const uint8_t *p, uint32_t len)
@@ -262,7 +300,7 @@ static bool self_test(void)
     printf("[3] 4KBの消去\n");
     t0 = time_us_64();
     r = AT25SF_erase_sector(SELFTEST_ADDR);
-    printf("    結果 = %s、時間 = %lu us（標準55ms、最大250ms）\n", AT25SF_result_name(r),
+    printf("    結果 = %s、時間 = %lu us（標準55ms、最大250ms。何も書いていない所は、1ms以下のこともあります）\n", AT25SF_result_name(r),
            (unsigned long)(time_us_64() - t0));
     if (r != AT25SF_OK) {
         print_hint(r);
@@ -407,6 +445,7 @@ int main(void)
             break;
         case 't':
             printf("自己診断 : %s\n", self_test() ? "合格" : "不合格");
+            print_diag();
             break;
         case 'e': {
             printf("消去します（%lu バイト分）...\n", (unsigned long)TEST_ERASE_BYTES);
@@ -414,6 +453,7 @@ int main(void)
             AT25SF_result_t er = log_erase(TEST_ERASE_BYTES);
             printf("消去 : %s、時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
             print_hint(er);
+            print_diag();
             break;
         }
         case 'l':
@@ -452,6 +492,7 @@ int main(void)
             AT25SF_result_t er = AT25SF_erase_chip();
             printf("全消去 : %s、時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
             print_hint(er);
+            print_diag();
             if (er == AT25SF_OK) {
                 printf("ログを記録する前に、もう一度 'e' を送ってください。\n");
             }
