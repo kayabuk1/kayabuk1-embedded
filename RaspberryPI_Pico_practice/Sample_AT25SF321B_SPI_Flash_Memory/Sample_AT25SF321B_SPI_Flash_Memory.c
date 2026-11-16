@@ -1,14 +1,18 @@
 
+// ◆2026/11/16コード内の古いコード整理や削除の為、
+// Old~.cファイルを作成して。そちらに古いコードを残し、
+// 現在の.cファイルから古いコード部分を削除する。
 // ◆2026年11月12日考えメモとりあえずバフに書き込む処理はある程度書けた
 // 次は、256byte 一気にAT25SFに書き込む処理だな。
 // ◆他やっておきたいこと
 // ●static inline修飾子を付けて、内部でのみ使う関数は、名前の競合の
 // 心配がないので、より短く簡潔な名称で使いやすく。例AT25SF_cs_low⇒cs_low
-// ●全消去終了完了を知らせるブザーを鳴らす回路をブレッドボードに組む。
 // ●関数の並びがグチャグチャなので、整理する。
 // ●ページ単位での処理が可能になったら、セクタ4k単位での書込み処理を実装する
-// ●ページ単位の書き込み処理が実行可能になったら、オシロで掛かる時間を実測する。
-// 
+// ◆logデータをそのまま16byte取得ごとにAT25SFへSPI通信するのは、
+// オーバヘッドが大きく、マイクロマウス制御に影響を及ぼすため、
+// 間にダブルバッファを挟み256byte一気に送信する方針に変更。
+// そのためコメントアウト。後ほど削除するか検討。
 
 #include <stdio.h>
 #include <stdint.h>
@@ -290,9 +294,10 @@ static inline void AT25SF_cs_high(void){
 static void AT25SF_only_send_opecode(uint8_t op);                                 
 // 06h, C7h
 static void AT25SF_only_read(uint8_t op, uint8_t *buf, size_t len);         
-// 05h, 9Fh
-static void cmd_addr(uint8_t op, uint32_t addr);                    
-// 20h, 52h, D8h
+// 05h, 9Fh, 読み込んだデータを入れるbufを渡してそれにデータを入れてもらうので
+// 戻り値はvoidにする。
+static void AT25SF_send_opecode_addr(uint8_t op, uint32_t addr);                    
+// 20h, 52h, D8h(4KB消去、32KB消去、64KB消去)
 static void cmd_addr_write(
 uint8_t op, uint32_t addr, const uint8_t *buf, size_t len);  
 // 02h
@@ -310,19 +315,22 @@ static void AT25SF_only_send_opecode(uint8_t op)
 }
 static void AT25SF_only_read(uint8_t op, uint8_t *buf, size_t len)
 {
- uint8_t tx[len] = {0};
- tx[0] = op;
- AT25SF_cs_low();
- spi_write_read_blocking(
-        AT25SF_SPI_PORT, tx, buf, len);
- AT25SF_cs_high();
+    uint8_t tx[len];
+    tx[0] = op;
+    for (uint8_t i=1; i < len; i++){
+       tx[i] = 0x00;
+    }
+    AT25SF_cs_low();
+    spi_write_read_blocking(
+           AT25SF_SPI_PORT, tx, buf, len);
+    AT25SF_cs_high();
 }
 
 static inline void AT25SF_write_enable(void);
 static inline void AT25SF_write_enable(void){
     // WEL: WriteEnableLatch
     uint8_t opecode = AT25SF_WRITE_ENABLE;
-    AT25SF_only_send_opecode(opcode);
+    AT25SF_only_send_opecode(opecode);
     // WriteEnaaleコマンド 06hを送信し、書込み許可BIT(WEL)を１に。
     // WELが１になるのは CS が HIGH になった瞬間。
     // この後、データの書き込み処理などが続き、BUSYBITが０になると、
@@ -337,12 +345,9 @@ uint8_t read_status_register_1(void);
  */
 uint8_t read_status_register_1(void)
 {   
-    uint8_t tx[2] = {READ_STATUS_REGISTER_1, 0x00};
+    uint8_t op = READ_STATUS_REGISTER_1;
     uint8_t rx[2] = {0};
-    AT25SF_cs_low();
-    spi_write_read_blocking(
-        AT25SF_SPI_PORT, tx, rx, 2);
-    AT25SF_cs_high();
+    AT25SF_only_read(op, rx, sizeof(rx));
     return rx[1];
 }
 
@@ -355,16 +360,12 @@ bool read_status_is_busy(void);
  */
 bool read_status_is_busy(void)
 {
-    uint8_t opecode = READ_STATUS_REGISTER_1;
-    uint8_t tx[2] = {opecode, 0x00};
+    uint8_t op = READ_STATUS_REGISTER_1;
     uint8_t rx[2] = {0};
-    AT25SF_cs_low();
-    spi_write_read_blocking(
-        AT25SF_SPI_PORT, tx, rx, 2);
+    AT25SF_only_read(op, rx, sizeof(rx));
     // opecodeの8バイト後のダミービット8バイト送信して、
     // 8ビットのレジスタ1のデータが返ってくるので、送るデータ数は2。
     // SPIはリングバッファなので、受信するには同じサイズのデータを送っている。
-    AT25SF_cs_high();
     bool status = rx[1] & 0x01;
     printf("BUSY/REDY：%d\n",status);
     flash_state = !status;
@@ -373,7 +374,31 @@ bool read_status_is_busy(void)
     return status;
     // Ready/BusyBITが 1の時Busy,0の時Ready。
 }
-// ◆割り込み処理考えメモ
+
+// repeating_timer_t * を受け取るタイマーコールバック用アダプター
+static bool polling_status_callback(repeating_timer_t *timer)
+{
+    (void)timer;
+    return read_status_is_busy();
+}
+
+/**
+ * 
+ */
+bool AT25SF_read_jedec_id(void) {
+    uint8_t rx_id[3] = {0};
+    uint8_t op = JEDEC_ID_READ;
+    AT25SF_only_read(op, rx_id, sizeof(rx_id));
+    bool AT25SF_init_status =
+     (rx_id[0]==0x1f && rx_id[1]==0x87 && rx_id[2]==0x01);
+    #if AT25SF_DEBUG
+    printf("%02X %02X %02X\n", rx_id[0], rx_id[1], rx_id[2]);
+    printf("通信成否: %d\n", AT25SF_init_status);
+    #endif
+    return AT25SF_init_status;
+}
+
+// ===============◆割り込み処理考えメモ==========================
 // add_repeating_timer_us()をそのまま使うのでは使いずらい、
 // ➡start_polling()みたいな関数でラップしたい。
 // start_polling⇒add_repeating_timer_ms⇒polling_timer_callback
@@ -398,7 +423,7 @@ bool(*polling_timer_callback)(repeating_timer_t *))
     // 「repeating_timer_t * を1つ受け取り、boolを返す」形と決まっている。
 }
 // main内使用例
-//     start_polling(PAGE_WRITE_TAKES_TIME, read_status_is_busy);
+//     start_polling(PAGE_WRITE_TAKES_TIME, polling_status_callback);
 // ◆ポーリング処理考えメモ
 // ●ポーリング間隔はどの程度が良いか？根拠が分かる部分はある？
 // ➡データシートの「Page Program Time（標準約0.7ms）」や
@@ -423,7 +448,7 @@ bool(*polling_timer_callback)(repeating_timer_t *))
 // アドレスは24bitだな丁度よい型がないな。uint8_tを3個、0x00 00 00
 // みたいにして増やしていくのが良いのだろうか？
 // 全送信データは書込みなら40bit
-
+// ＝＝＝＝＝＝＝＝＝＝割込みについてのメモここまで＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
 
 static uint32_t memory_address = 0x00000000; //00000000h~3FFFFFh
 static uint8_t page_count = 0;
@@ -491,66 +516,6 @@ void AT25SF_write_byte(uint8_t opecode, uint8_t data)
     }
 }
 
-// ◆logデータをそのまま16byte取得ごとにAT25SFへSPI通信するのは、
-// オーバヘッドが大きく、マイクロマウス制御に影響を及ぼすため、
-// 間にダブルバッファを挟み256byte一気に送信する方針に変更。
-// そのためコメントアウト。後ほど削除するか検討。
-// // log_dataを送る前に、データを取得して now_sensors_dataに保存する処理が必要か。
-// void AT25SF_write_log(void);
-// void AT25SF_write_log(void) //log_dataを送るのは明らかなので引数なし
-// {
-//     uint8_t opecode = AT25SF_PAGE_PROGRAM;
-//     if(read_status_is_busy()){
-//         return;
-//     }else{
-//         size_t max = sizeof(Sensors_data_t)/sizeof(uint8_t);
-//         uint8_t tx_buf[max + 4];
-//         tx_buf[0] = opecode;
-//         tx_buf[1] = (memory_address >> 16) & 0xFF;
-//         tx_buf[2] = (memory_address >> 8) & 0xFF;
-//         tx_buf[3] = memory_address;
-//         uint32_t ints = save_and_disable_interrupts();
-//         tx_buf[4] = now_sensors_data.sensor_displacement;
-//         tx_buf[5] = now_sensors_data.sensor_binary;
-//         tx_buf[6] = (now_sensors_data.target_speed >> 8) & 0xFF;
-//         tx_buf[7] = now_sensors_data.target_speed & 0xFF;
-//         tx_buf[8] = (now_sensors_data.left_speed >> 8) & 0xFF;
-//         tx_buf[9] = now_sensors_data.left_speed & 0xFF;
-//         tx_buf[10] = (now_sensors_data.right_speed >> 8) & 0xFF;
-//         tx_buf[11] = now_sensors_data.right_speed & 0xFF;
-//         tx_buf[12] = now_sensors_data.left_motor_duty;
-//         tx_buf[13] = now_sensors_data.right_motor_duty;
-//         tx_buf[14] = ((uint16_t)now_sensors_data.target_angular_velocity >> 8) & 0xFF;
-//         tx_buf[15] = now_sensors_data.target_angular_velocity & 0xFF;
-//         tx_buf[16] = ((uint16_t)now_sensors_data.now_angular_velocity >> 8) & 0xFF;
-//         tx_buf[17] = now_sensors_data.now_angular_velocity & 0xFF;
-//         tx_buf[18] = (now_sensors_data.vcc_mv >> 8) & 0xFF;
-//         tx_buf[19] = now_sensors_data.vcc_mv & 0xFF;
-//         restore_interrupts(ints);
-//         AT25SF_write_enable();
-//         AT25SF_cs_low();
-//         spi_write_blocking(AT25SF_SPI_PORT, tx_buf, max+4);
-//         AT25SF_cs_high();
-//         // 1MHzで20バイト送ると約160µsかかる（8μs*20）。
-//         // 1msの制御周期のうち、16%をSPIの待ちで使ってしまう。
-//         // ➡フラッシュへの記録SPI通信で割込みを行うのは難しい。
-//         memory_address += sizeof(Sensors_data_t); 
-//         // 10進数の「16」は16進数で 0x10 なので、
-//         // 毎回下から2桁目が +1 される（0x00 ➔ 0x10 ➔ 0x20 ➔ ...0xF0）。
-//         // 16回目で桁上がりして、0x100になって下位2ビットが0x00に戻る。
-//         // これでピッタリ256バイト(1ページ)になる。
-//         // if((memory_address & 0X0F) != 0x00)
-//         // // 0xFF = 0b1111_1111 = 255
-//         // // 10進数の16は 2進数では 0b00010000。
-//         // // 16ずつ増やすと、下位4ビットはずっと 0000 のまま固定。
-//         // // なので、アドレスを0x0Fでマスクして下位4ビットを取り出して、
-//         // // それが 0000 で無ければずれていると判定してアドレスを修正する。
-//         // {
-//         //     memory_address = (memory_address & ~0x0F)+0x10;
-//         // }⇒ここのifは、16刻みで送るなら、
-//         // なくても大丈夫と判断。一時コメントアウト。
-//     }
-// }
 
 /*◆変数についてのメモ
 変数ごとに「誰が書き、誰が読むか」を決める。
@@ -860,6 +825,9 @@ void AT25SF_read(uint32_t addr, uint8_t *buf, size_t len)
     spi_read_blocking(AT25SF_SPI_PORT, 0x00, buf, len);
     AT25SF_cs_high();
 }
+
+
+
 // #define AT25SF_NORMAL_READ 0x03 //1線データ読出し。最大55MHz
 // #define AT25SF_FAST_READ 0x0B //最大133MHz。ﾀﾞﾐｰ８ｸﾛｯｸが挟まる。
 static uint8_t read_buf[4096] = {0};
@@ -942,7 +910,7 @@ void dump_log_to_pc(uint32_t end_addr)
             printf("%dバイト目データ：%d\n",j, read_buf[j]);
            }
            // ファイルへの書き込みは全行行う。
-         　fprint(fp, "%d\n", read_buf[j]);
+           fprint(fp, "%d\n", read_buf[j]);
         }
         fclose(fp);
         printf("作成されたファイル名: %s\n", filename);
@@ -955,20 +923,6 @@ void dump_log_to_pc(uint32_t end_addr)
     #endif
 }
 
-bool AT25SF_read_jedec_id(void) {
-    uint8_t id[3] = {0};
-    uint8_t opecode = JEDEC_ID_READ;
-    gpio_put(AT25SF_PIN_CS, 0);
-    spi_write_blocking(AT25SF_SPI_PORT, &opecode, 1);
-    spi_read_blocking(AT25SF_SPI_PORT, 0x00, id, 3);
-    gpio_put(AT25SF_PIN_CS, 1);
-    bool AT25SF_init_status = (id[0]==0x1f && id[1]==0x87 && id[2]==0x01);
-    #if AT25SF_DEBUG
-    printf("%02X %02X %02X：通信成否「%d」\n",
-     id[0], id[1], id[2], AT25SF_init_status);
-    #endif
-    return At25SF_init_status;
-}
 static volatile uint32_t log_count = 0;
 // 1. タイマー割り込みで呼ばれるコールバック関数
 bool timer_1ms_callback(struct repeating_timer *t) {
