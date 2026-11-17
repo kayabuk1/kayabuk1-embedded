@@ -29,8 +29,8 @@
 
 #include "pico/stdlib.h"
 
-#include "at25sf.h"
-#include "flash_log.h"
+#include "at25sf/at25sf.h"
+#include "flash_log/flash_log.h"
 
 /* 1000件 = 1秒分。16件で1ページなので、62ページと8件になります。
  * わざと半端な数にして、最後の「詰めかけのページ」を書く処理（log_stop）も確かめます。

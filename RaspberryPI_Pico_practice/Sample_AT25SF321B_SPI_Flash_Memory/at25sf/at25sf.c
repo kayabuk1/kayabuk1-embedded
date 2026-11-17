@@ -48,7 +48,7 @@
  *   あわせて、起きた回数と、そのとき読んだ値を数えるようにしました（AT25SF_get_diag）。
  *   数が 0 でなければ、どちらが起きたのかを、値から見分けられます。
  */
-#include "at25sf.h"
+#include "at25sf/at25sf.h"
 
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
