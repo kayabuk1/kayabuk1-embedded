@@ -86,8 +86,11 @@ static uint32_t write_addr = 0;
 static uint32_t erased_until = 0;
 static uint32_t pages_written = 0;
 static uint32_t write_errors = 0;
-static uint32_t max_send_us = 0;
-static uint32_t max_busy_us = 0;
+static uint32_t max_send_us = 0;   /* 1ページをICへ送る時間の、最大                         */
+static uint32_t total_send_us = 0; /* 1ページをICへ送る時間の、全ページ分の合計             */
+static uint32_t max_busy_us = 0;   /* 送り終えてから BUSY=0 を確認するまでの時間の、最大    */
+static uint64_t log_start_us = 0;  /* log_start() を呼んだ時刻（0 は「記録していない」）    */
+static uint32_t log_time_ms = 0;   /* log_start() から log_stop() が終わるまでの時間        */
 static uint32_t pad_bytes = 0; /* log_stop で、最後のページを埋めるために足したバイト数 */
 
 /* ===== 構造体 ⇔ 16バイト ====================================================
@@ -151,7 +154,10 @@ static void reset_state(void)
     pages_written = 0;
     write_errors = 0;
     max_send_us = 0;
+    total_send_us = 0;
     max_busy_us = 0;
+    log_start_us = 0;
+    log_time_ms = 0;
     pad_bytes = 0;
 }
 
@@ -234,6 +240,7 @@ bool log_start(void)
     if (erased_until == 0 || total_bytes != 0 || write_addr != 0) {
         return false;
     }
+    log_start_us = time_us_64(); /* 記録全体の時間を測るための、始まりの時刻 */
     logging = true;
     return true;
 }
@@ -369,10 +376,15 @@ void flash_task(void)
         return;
     }
 
+    /* t0 と t1 は、AT25SF_page_program_start() を呼ぶ直前と、戻った直後の時刻です。
+     * その差が「この1ページをICへ送るのにかかった時間」です。
+     * 最大（いちばん長かった1ページ）と、合計（全ページ分）の2つを残します。
+     */
     uint32_t send_us = (uint32_t)(t1 - t0);
     if (send_us > max_send_us) {
         max_send_us = send_us;
     }
+    total_send_us += send_us;
     write_addr += AT25SF_PAGE_SIZE; /* アドレスを進めるのは、ここ1か所だけ */
     pages_written++;
     flash_state = FLASH_BUSY;
@@ -429,6 +441,15 @@ bool log_stop(void)
         if (!drain(LOG_DRAIN_TIMEOUT_US)) {
             return false;
         }
+    }
+
+    /* 記録全体の時間です。log_start() を呼んだ時刻から、ここ（最後のページをICが
+     * 書き終えた所）までを測ります。log_stop() を2回呼んでも測り直さないように、
+     * 測ったら log_start_us を 0 に戻します。
+     */
+    if (log_start_us != 0) {
+        log_time_ms = (uint32_t)((time_us_64() - log_start_us) / 1000u);
+        log_start_us = 0;
     }
     return write_errors == 0;
 }
@@ -537,7 +558,9 @@ void log_get_stats(log_stats_t *out)
     out->dropped_pages = dropped_pages;
     out->write_errors = write_errors;
     out->max_send_us = max_send_us;
+    out->total_send_us = total_send_us;
     out->max_busy_us = max_busy_us;
+    out->log_time_ms = log_time_ms;
     out->write_addr = write_addr;
     out->capacity_bytes = capacity_bytes;
     out->erased_until = erased_until;

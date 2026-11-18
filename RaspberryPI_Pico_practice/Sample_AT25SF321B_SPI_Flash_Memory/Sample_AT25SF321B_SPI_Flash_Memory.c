@@ -1,5 +1,5 @@
 /**
- * @file  main.c
+ * @file  Sample_AT25SF321B_SPI_Flash_Memory.c （中身は、配布用の main.c と同じです）
  * @brief フラッシュのログを、机の上で試すためのプログラム 【アプリの層】
  *
  * この層の役割は、「いつ、何をするか」を決めることです。
@@ -163,7 +163,6 @@ static bool print_id_status(void)
 }
 
 /** ドライバが数えている「つじつまの合わない読み取り」の回数を表示します。
- *  どちらも 0 が正常です。0 でなくても、ドライバは待ち直して先へ進みますが、
  *  配線やICの様子を調べる手がかりになるので、結果と一緒に出します。
  *  （11/16の実機テストで、消去が ERR_BUSY で止まったことを受けて足しました）
  */
@@ -171,18 +170,31 @@ static void print_diag(void)
 {
     AT25SF_diag_t d;
     AT25SF_get_diag(&d);
-    printf("読み直し       : 06hの後にBUSY %lu回", (unsigned long)d.wren_busy);
+    printf("--- ステータスの読み直し（電源を入れてからの合計）---\n");
+
+    /* 1つ目：ドライバが「前の処理は終わった」と判断した後、06h（書き込み許可）を送り、
+     * 続けて読んだステータスが BUSY=1 だった回数です。0 が正常です。
+     */
+    printf("06h（書き込み許可）の後に BUSY=1 と読めた回数 : %lu 回（0が正常）", (unsigned long)d.wren_busy);
     if (d.wren_busy != 0) {
-        printf("（SR1=%02X）", d.wren_busy_sr1);
+        printf("、そのとき読んだ SR1 = %02X", d.wren_busy_sr1);
     }
-    printf("、BUSYの戻り %lu回", (unsigned long)d.busy_again);
+    printf("\n");
+
+    /* 2つ目：消去や書き込みが終わるのを待っている間に、BUSY=0 と読めたのに、
+     * 次に読むとまた BUSY=1 だった回数です。11/18の実機では、消去の時間にほぼ比例して
+     * 出ました（4KBの消去で3回、64KBで22回。値は 02 = BUSY=0、WEL=1）。
+     * ドライバは WEL も見て待ち続けるので、結果には影響しません。
+     */
+    printf("消去や書き込みの途中で BUSY=0 と読めた回数   : %lu 回", (unsigned long)d.busy_again);
     if (d.busy_again != 0) {
-        printf("（SR1=%02X）", d.busy_again_sr1);
+        printf("、そのとき読んだ SR1 = %02X（消去の途中に出ることがあります。結果には影響しません）", d.busy_again_sr1);
     }
-    printf(" （0が正常。電源を入れてからの合計）\n");
-    if (d.wren_busy != 0 || d.busy_again != 0) {
-        printf(" → 0でない数があります。ドライバは待ち直して先へ進んでいますが、この行を控えておいてください。\n");
-        printf("   SR1=FF : ICが答えていない / 03 : 前の処理がまだ続いていた / 00,02 : 途中で BUSY=0 と読めた\n");
+    printf("\n");
+
+    if (d.wren_busy != 0) {
+        printf(" → 「06hの後に BUSY=1 と読めた回数」が 0 ではありません。ドライバは待ち直して先へ進んでいますが、\n");
+        printf("   この表示を控えておいてください。SR1=FF : ICが答えていない / 03 : 前の処理がまだ続いていた\n");
     }
 }
 
@@ -233,16 +245,45 @@ static void print_stats(void)
 {
     log_stats_t st;
     log_get_stats(&st);
-    printf("記録した件数   : %lu\n", (unsigned long)st.records);
-    printf("書いたページ   : %lu\n", (unsigned long)st.pages_written);
-    printf("捨てたページ   : %lu （0が正常）\n", (unsigned long)st.dropped_pages);
-    printf("書き込みエラー : %lu （0が正常）\n", (unsigned long)st.write_errors);
-    printf("送信の最大     : %lu us\n", (unsigned long)st.max_send_us);
-    printf("BUSYの最大     : %lu us\n", (unsigned long)st.max_busy_us);
-    printf("次のアドレス   : 0x%06lX / 上限 0x%06lX / 消去済み 0x%06lX\n",
+
+    /* 「件」「ページ」「バイト」の3つの単位が出てきます。どの単位の値かを、行ごとに書きます。
+     *   1件     = 16バイト（1msごとの記録1つ）
+     *   1ページ = 256バイト = 16件（フラッシュに1回で書くまとまり）
+     */
+    const unsigned long records = (unsigned long)st.records;
+    const unsigned long pages = (unsigned long)st.pages_written;
+    const unsigned long record_bytes = records * LOG_RECORD_SIZE;
+    const unsigned long page_bytes = pages * AT25SF_PAGE_SIZE;
+
+    printf("--- 記録した量 ---\n");
+    printf("記録した件数               : %lu 件（%lu バイト。1件は16バイト）\n", records, record_bytes);
+    printf("フラッシュに書いたページ数 : %lu ページ（%lu バイト。1ページは256バイト＝16件）\n", pages, page_bytes);
+    if (st.write_errors == 0 && page_bytes > record_bytes) {
+        /* 件数が16の倍数でないと、最後のページに余りが出ます。log_stop() が、余りを FF で埋めて書きます。 */
+        printf("  （差の %lu バイトは、最後のページの余りを FF で埋めた分です）\n", page_bytes - record_bytes);
+    }
+    printf("捨てたページ数             : %lu ページ（0が正常）\n", (unsigned long)st.dropped_pages);
+    printf("書き込みエラーの回数       : %lu 回（0が正常）\n", (unsigned long)st.write_errors);
+
+    /* 時間は、「記録全体」「全ページの合計」「1ページあたり」を分けて出します。
+     *   1ページをICへ送る時間 : 06h → ステータスの確認 → 02h+アドレス+256バイト を送り終えるまで。
+     *                           この間、mainはSPIの送信にかかりきりになります
+     *   送った後の待ち時間    : 送り終えてから、flash_task が BUSY=0 を確認するまで
+     *                           （ICが、受け取った1ページを中で書いている時間）
+     */
+    printf("--- かかった時間 ---\n");
+    printf("記録全体の時間                   : %lu ms（記録を始めてから、最後のページを書き終えるまで）\n",
+           (unsigned long)st.log_time_ms);
+    printf("全ページをICへ送った時間の合計   : %lu us（%lu ページ分）\n", (unsigned long)st.total_send_us, pages);
+    printf("1ページをICへ送る時間            : 平均 %lu us、最大 %lu us\n",
+           pages != 0 ? (unsigned long)st.total_send_us / pages : 0ul, (unsigned long)st.max_send_us);
+    printf("1ページを送った後、ICが書き終えるのを待った時間 : 最大 %lu us\n", (unsigned long)st.max_busy_us);
+
+    printf("--- 書いた場所と、今の状態 ---\n");
+    printf("次に書くアドレス 0x%06lX / 記録できる上限のアドレス 0x%06lX / 消去が済んでいる範囲の終わり 0x%06lX\n",
            (unsigned long)st.write_addr, (unsigned long)st.capacity_bytes,
            (unsigned long)st.erased_until);
-    printf("記録中=%d 満杯=%d\n", st.logging ? 1 : 0, st.full ? 1 : 0);
+    printf("記録中か = %d、上限まで使い切ったか = %d （1 なら「はい」）\n", st.logging ? 1 : 0, st.full ? 1 : 0);
     print_diag();
 }
 
@@ -300,7 +341,7 @@ static bool self_test(void)
     printf("[3] 4KBの消去\n");
     t0 = time_us_64();
     r = AT25SF_erase_sector(SELFTEST_ADDR);
-    printf("    結果 = %s、時間 = %lu us（標準55ms、最大250ms。何も書いていない所は、1ms以下のこともあります）\n", AT25SF_result_name(r),
+    printf("    4KBの消去の結果 = %s、消去にかかった時間 = %lu us（データシートでは標準55ms、最大250ms。何も書いていない所は、1ms以下のこともあります）\n", AT25SF_result_name(r),
            (unsigned long)(time_us_64() - t0));
     if (r != AT25SF_OK) {
         print_hint(r);
@@ -331,7 +372,7 @@ static bool self_test(void)
     printf("[5] 1ページ（256バイト）書く\n");
     t0 = time_us_64();
     r = AT25SF_page_program(SELFTEST_ADDR, pattern, sizeof(pattern));
-    printf("    結果 = %s、時間 = %lu us（送信の時間を含む。書き込み自体は標準0.4ms、最大3.4ms）\n",
+    printf("    1ページの書き込みの結果 = %s、かかった時間 = %lu us（256バイトをICへ送る時間と、ICが中で書く時間の合計。ICが中で書く時間は、データシートでは標準0.4ms、最大3.4ms）\n",
            AT25SF_result_name(r), (unsigned long)(time_us_64() - t0));
     if (r != AT25SF_OK) {
         print_hint(r);
@@ -413,7 +454,17 @@ static void verify_test_log(void)
 int main(void)
 {
     stdio_init_all();
-    sleep_ms(2000); /* PCのシリアルモニタがつながるのを、少し待つ */
+    /* 最初の表示は、起動のときに1回だけ出します。そのときPCのシリアルモニタが開いていないと、
+     * 表示はどこにも届かず、消えます。USBで表示する設定のときは、モニタが開くまで待ちます
+     * （長くても10秒。機体に載せるプログラムでは、PCをつながないので、この待ちは入れません）。
+     */
+#if LIB_PICO_STDIO_USB
+    for (int i = 0; i < 100 && !stdio_usb_connected(); i++) {
+        sleep_ms(100);
+    }
+#else
+    sleep_ms(2000);
+#endif
 
     AT25SF_result_t r = log_init();
     printf("\nAT25SF321B フラッシュログ 試験プログラム\n");
@@ -451,7 +502,7 @@ int main(void)
             printf("消去します（%lu バイト分）...\n", (unsigned long)TEST_ERASE_BYTES);
             uint64_t t0 = time_us_64();
             AT25SF_result_t er = log_erase(TEST_ERASE_BYTES);
-            printf("消去 : %s、時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
+            printf("ログの範囲の消去の結果 : %s、消去にかかった時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
             print_hint(er);
             print_diag();
             break;
@@ -490,7 +541,7 @@ int main(void)
             printf("チップ全体を消去します。10〜30秒かかります...\n");
             uint64_t t0 = time_us_64();
             AT25SF_result_t er = AT25SF_erase_chip();
-            printf("全消去 : %s、時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
+            printf("チップ全体の消去の結果 : %s、消去にかかった時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));
             print_hint(er);
             print_diag();
             if (er == AT25SF_OK) {
@@ -510,7 +561,7 @@ int main(void)
             test_finished = false;
             bool ok = log_stop();
             test_running = false;
-            printf("記録が終わりました : %s\n", ok ? "OK" : "NG");
+            printf("記録が終わりました。最後のページまで書けたか : %s\n", ok ? "OK" : "NG");
             print_stats();
             printf("'v' で照合、'd' でCSVを出せます。\n");
         }

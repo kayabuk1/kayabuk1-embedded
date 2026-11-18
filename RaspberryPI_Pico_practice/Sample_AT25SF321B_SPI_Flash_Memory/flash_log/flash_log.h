@@ -89,8 +89,15 @@ typedef struct {
     uint32_t pages_written;  /* フラッシュに書いたページ数                             */
     uint32_t dropped_pages;  /* mainの書き込みが間に合わず、捨てたページ数（0が正常）  */
     uint32_t write_errors;   /* 書き込みが受け付けられなかった回数（0が正常）          */
-    uint32_t max_send_us;    /* 1ページの送信にかかった時間の最大 [µs]                 */
-    uint32_t max_busy_us;    /* 送信の後、BUSYが外れるのを見るまでの時間の最大 [µs]    */
+    /* --- 時間。「1ページあたり」の値と、「全ページの合計」の値があります --- */
+    uint32_t max_send_us;    /* 1ページをICへ送るのにかかった時間の、全ページの中の最大 [µs]。
+                                06h → ステータスの確認 → 02h+アドレス+256バイト を送り終えるまで */
+    uint32_t total_send_us;  /* 上の「1ページをICへ送る時間」を、全ページ分足した合計 [µs]。
+                                この時間、mainはSPIの送信にかかりきりになります                */
+    uint32_t max_busy_us;    /* 1ページを送り終えてから、flash_task が BUSY=0 を確認するまでの
+                                時間の、全ページの中の最大 [µs]（ICが中で書いている時間）      */
+    uint32_t log_time_ms;    /* log_start() から、log_stop() が最後のページを書き終えるまでの
+                                時間 [ms]。まだ log_stop() を呼んでいなければ 0                */
     uint32_t write_addr;     /* 次に書くアドレス                                       */
     uint32_t capacity_bytes; /* 記録できる上限のバイト数                               */
     uint32_t erased_until;   /* 消去が済んでいる範囲の終わり                           */

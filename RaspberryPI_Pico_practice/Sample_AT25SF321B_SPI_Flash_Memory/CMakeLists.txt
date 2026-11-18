@@ -65,3 +65,4 @@ target_include_directories(Sample_AT25SF321B_SPI_Flash_Memory PRIVATE
 
 pico_add_extra_outputs(Sample_AT25SF321B_SPI_Flash_Memory)
 
+target_include_directories(Sample_AT25SF321B_SPI_Flash_Memory PRIVATE at25sf flash_log)
