@@ -48,7 +48,7 @@
  *   あわせて、起きた回数と、そのとき読んだ値を数えるようにしました（AT25SF_get_diag）。
  *   数が 0 でなければ、どちらが起きたのかを、値から見分けられます。
  */
-#include "at25sf/at25sf.h"
+#include "at25sf.h"
 
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
@@ -306,6 +306,21 @@ uint8_t AT25SF_read_status2(void)
 bool AT25SF_is_busy(void)
 {
     return (AT25SF_read_status1() & AT25SF_SR1_BUSY) != 0;
+}
+
+AT25SF_write_state_t AT25SF_write_state(void)
+{
+    /* 読むのは1回です。同じ1回の値から、BUSY と WEL の両方を判定します。
+     * 2回に分けて読むと、その間にICの状態が変わり、つじつまの合わない組み合わせになります。
+     */
+    const uint8_t s = AT25SF_read_status1();
+    if (s & AT25SF_SR1_BUSY) {
+        return AT25SF_WRITE_BUSY;
+    }
+    if (s & AT25SF_SR1_WEL) {
+        return AT25SF_WRITE_NOT_DONE;
+    }
+    return AT25SF_WRITE_DONE;
 }
 
 /* ===== 終わるのを待つ ========================================================

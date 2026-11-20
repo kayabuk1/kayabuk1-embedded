@@ -29,8 +29,8 @@
 
 #include "pico/stdlib.h"
 
-#include "at25sf/at25sf.h"
-#include "flash_log/flash_log.h"
+#include "at25sf.h"
+#include "flash_log.h"
 
 /* 1000件 = 1秒分。16件で1ページなので、62ページと8件になります。
  * わざと半端な数にして、最後の「詰めかけのページ」を書く処理（log_stop）も確かめます。
@@ -182,8 +182,9 @@ static void print_diag(void)
     printf("\n");
 
     /* 2つ目：消去や書き込みが終わるのを待っている間に、BUSY=0 と読めたのに、
-     * 次に読むとまた BUSY=1 だった回数です。11/18の実機では、消去の時間にほぼ比例して
-     * 出ました（4KBの消去で3回、64KBで22回。値は 02 = BUSY=0、WEL=1）。
+     * 次に読むとまた BUSY=1 だった回数です。11/18の実機では、
+     * 回によって回数が違いました（1回目の実行：4KBの消去で3回、64KBの消去で22回。2回目の実行：4KBで0回、64KBで1回、チップ全体の消去で17回）。
+     * 値は、どれも 02（BUSY=0、WEL=1）でした。
      * ドライバは WEL も見て待ち続けるので、結果には影響しません。
      */
     printf("消去や書き込みの途中で BUSY=0 と読めた回数   : %lu 回", (unsigned long)d.busy_again);
@@ -229,8 +230,8 @@ static void print_hint(AT25SF_result_t r)
         break;
     case AT25SF_ERR_NOT_STARTED:
         printf(" → 命令が受け付けられていないか、ステータスが正しく読めていません。\n");
-        printf("   SPIの速さ（AT25SF_SPI_BAUDRATE）を下げる、配線を短くする、\n");
-        printf("   HOLD# と WP# を3.3Vにつなぐ、の順に試してください。\n");
+        printf("   HOLD# と WP# を3.3Vにつなぐ（プルアップ抵抗でよい）、SPIの速さ（AT25SF_SPI_BAUDRATE）を下げる、\n");
+        printf("   配線を短くする、の順に試してください。\n");
         break;
     case AT25SF_ERR_TIMEOUT:
         printf(" → BUSYが外れません。SO の配線と、ICの電源を確かめてください。\n");
@@ -263,7 +264,14 @@ static void print_stats(void)
         printf("  （差の %lu バイトは、最後のページの余りを FF で埋めた分です）\n", page_bytes - record_bytes);
     }
     printf("捨てたページ数             : %lu ページ（0が正常）\n", (unsigned long)st.dropped_pages);
-    printf("書き込みエラーの回数       : %lu 回（0が正常）\n", (unsigned long)st.write_errors);
+    printf("書き込みエラーの回数       : %lu 回（0が正常。送り直しても書けなかったページの数）\n",
+           (unsigned long)st.write_errors);
+    /* ICが書き込みの命令を受け付けなかったときは、flash_task() が同じページを送り直します。
+     * 送り直して書けた分は、エラーには数えません。ただし、0でなければ、ICへの命令が
+     * 届かないことがある、という合図です（配線、電源、モーターの雑音を疑います）。
+     */
+    printf("ページを送り直した回数     : %lu 回（0が正常。0でなければ、ICへの命令が届かないことがあります）\n",
+           (unsigned long)st.write_retries);
 
     /* 時間は、「記録全体」「全ページの合計」「1ページあたり」を分けて出します。
      *   1ページをICへ送る時間 : 06h → ステータスの確認 → 02h+アドレス+256バイト を送り終えるまで。
@@ -538,7 +546,7 @@ int main(void)
             break;
         }
         case 'C': {
-            printf("チップ全体を消去します。10〜30秒かかります...\n");
+            printf("チップ全体を消去します。データシートでは10〜30秒です（何も書いていない所が多いと、1秒以下で終わることもあります）...\n");
             uint64_t t0 = time_us_64();
             AT25SF_result_t er = AT25SF_erase_chip();
             printf("チップ全体の消去の結果 : %s、消去にかかった時間 = %lu us\n", AT25SF_result_name(er), (unsigned long)(time_us_64() - t0));

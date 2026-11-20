@@ -32,7 +32,7 @@
  *   log_put は、SPIに触りません。だから、mainがSPIで送っている途中に割り込みが入っても、
  *   送信が少し止まるだけで、通信は壊れません。
  */
-#include "flash_log/flash_log.h"
+#include "flash_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -44,6 +44,10 @@
 #define LOG_PAGE_TIMEOUT_US (20u * 1000u)
 /* log_stop などで、残りを書き終えるのを待つ上限。 */
 #define LOG_DRAIN_TIMEOUT_US (200u * 1000u)
+/* 送ったページをICが受け付けなかったときに、同じページを送り直す回数の上限。
+ * 2 なら、最初の1回と合わせて、最大3回送ります。それでもだめなら、エラーに数えます。
+ */
+#define LOG_PAGE_RETRY_MAX 2u
 
 /* ===== 状態 ================================================================= */
 
@@ -86,6 +90,7 @@ static uint32_t write_addr = 0;
 static uint32_t erased_until = 0;
 static uint32_t pages_written = 0;
 static uint32_t write_errors = 0;
+static uint32_t write_retries = 0; /* ICが受け付けなかったページを、送り直した回数          */
 static uint32_t max_send_us = 0;   /* 1ページをICへ送る時間の、最大                         */
 static uint32_t total_send_us = 0; /* 1ページをICへ送る時間の、全ページ分の合計             */
 static uint32_t max_busy_us = 0;   /* 送り終えてから BUSY=0 を確認するまでの時間の、最大    */
@@ -153,6 +158,7 @@ static void reset_state(void)
     erased_until = 0;
     pages_written = 0;
     write_errors = 0;
+    write_retries = 0;
     max_send_us = 0;
     total_send_us = 0;
     max_busy_us = 0;
@@ -304,11 +310,69 @@ void log_put(const volatile Sensors_data_t *src)
     total_bytes = total;
 }
 
+/* ===== 送ったページを、ICが受け付けたかを確かめる ===========================
+ * ICが書き込みの命令（02h）を受け付けると、すぐに BUSY=1 になります。
+ * 受け付けなかったときは、BUSY=0 のままで、06h で立てた WEL=1 が残ります（SR1 = 02）。
+ * 2026-11-18 に、同じ電源でモーターを回した測定で、この状態が実際に出ました。
+ *
+ * 1回の読み取りは、そのまま信じません。書いている途中でも、SR1 = 02 と1回だけ
+ * 読めることがあるためです（同じ日の測定の「BUSY=0 と読めた回数」）。
+ * 「書かれていない」と決めるのは、2回続けて同じ答えになったときだけです。
+ * 2回の答えが食い違ったら、「まだ書いている」として扱います。
+ */
+static AT25SF_write_state_t settled_write_state(void)
+{
+    AT25SF_write_state_t first = AT25SF_write_state();
+    if (first == AT25SF_WRITE_BUSY) {
+        return first; /* ふつうはここで戻ります。読むのは1回で済みます */
+    }
+    AT25SF_write_state_t second = AT25SF_write_state();
+    return (first == second) ? first : AT25SF_WRITE_BUSY;
+}
+
+/* 1ページを送り、ICが受け付けたかを確かめます。受け付けていなければ、同じページを送り直します。
+ *   AT25SF_OK              : ICが受け付けた（書いている最中か、もう書き終えた）
+ *   AT25SF_ERR_BUSY        : 送る前の確認で、ICがまだ前の処理中だった（1回目だけ）
+ *   AT25SF_ERR_NOT_STARTED : LOG_PAGE_RETRY_MAX 回送り直しても、受け付けられなかった
+ *   それ以外               : 送る前の確認で止まった（WELが立たない、保護されている、など）
+ *
+ * 送り直しても、データは壊れません。受け付けられなかったページは、まだ消去されたままです。
+ * もし判断が違っていて、1回目が実は書かれていたとしても、同じ場所に同じデータを
+ * もう一度書くだけなので、中身は変わりません。
+ */
+static AT25SF_result_t send_page_checked(uint32_t addr, const uint8_t *data)
+{
+    AT25SF_result_t r = AT25SF_page_program_start(addr, data, AT25SF_PAGE_SIZE);
+    if (r != AT25SF_OK) {
+        return r;
+    }
+    for (uint32_t retry = 0;; retry++) {
+        if (settled_write_state() != AT25SF_WRITE_NOT_DONE) {
+            return AT25SF_OK;
+        }
+        if (retry == LOG_PAGE_RETRY_MAX) {
+            return AT25SF_ERR_NOT_STARTED;
+        }
+        r = AT25SF_page_program_start(addr, data, AT25SF_PAGE_SIZE);
+        if (r == AT25SF_ERR_BUSY) {
+            /* 送り直そうとしたら、ICは書いている最中でした。
+             * 最初に送った命令は届いていた、ということなので、送り直しは要りません。
+             */
+            return AT25SF_OK;
+        }
+        if (r != AT25SF_OK) {
+            return r;
+        }
+        write_retries++;
+    }
+}
+
 /* ===== 書き込み（mainから呼ぶ） =============================================
  * 待たずに少しずつ進めます。mainのループを止めないためです。
  *   FLASH_BUSY  : 前に送ったページを、ICが中で書いている。BUSYが外れたかを1回だけ見る。
  *                 外れていたら FLASH_READY になり、そのまま下の処理へ進む
- *   FLASH_READY : 札の付いた箱があれば送る（送るだけで、書き終わるのは待たない）→ FLASH_BUSY へ
+ *   FLASH_READY : 札の付いた箱があれば送り、ICが受け付けたかを確かめる
+ *                 （書き終わるのは待たない）→ FLASH_BUSY へ
  *
  * 「BUSYが外れたのを見る」と「次の箱を送る」を、1回の呼び出しで続けて行います。
  * 別々の呼び出しに分けると、1ページにつき flash_task を2回呼ぶ必要があり、
@@ -358,7 +422,7 @@ void flash_task(void)
      * 運ぶ箱は、札（buf_state）だけを見て決めます。
      */
     uint64_t t0 = time_us_64();
-    AT25SF_result_t r = AT25SF_page_program_start(write_addr, page_buf[page], AT25SF_PAGE_SIZE);
+    AT25SF_result_t r = send_page_checked(write_addr, page_buf[page]);
     uint64_t t1 = time_us_64();
 
     if (r == AT25SF_ERR_BUSY) {
@@ -376,8 +440,9 @@ void flash_task(void)
         return;
     }
 
-    /* t0 と t1 は、AT25SF_page_program_start() を呼ぶ直前と、戻った直後の時刻です。
+    /* t0 と t1 は、send_page_checked() を呼ぶ直前と、戻った直後の時刻です。
      * その差が「この1ページをICへ送るのにかかった時間」です。
+     * ICが受け付けたかの確認（ステータスを1回読む分）と、送り直した分も含みます。
      * 最大（いちばん長かった1ページ）と、合計（全ページ分）の2つを残します。
      */
     uint32_t send_us = (uint32_t)(t1 - t0);
@@ -391,8 +456,8 @@ void flash_task(void)
     busy_is_page_write = true;
     busy_start_us = t1;
 
-    /* 札を外します。データはCSを上げた時点でICの中に送り終えているので、
-     * 書き終わるのを待たずに、箱を空けて構いません。
+    /* 札を外します。ICが受け付けたことは、send_page_checked() で確かめてあります。
+     * データはICの中に入っているので、書き終わるのを待たずに、箱を空けて構いません。
      */
     buf_state = NOT_READY;
 }
@@ -557,6 +622,7 @@ void log_get_stats(log_stats_t *out)
     out->pages_written = pages_written;
     out->dropped_pages = dropped_pages;
     out->write_errors = write_errors;
+    out->write_retries = write_retries;
     out->max_send_us = max_send_us;
     out->total_send_us = total_send_us;
     out->max_busy_us = max_busy_us;
