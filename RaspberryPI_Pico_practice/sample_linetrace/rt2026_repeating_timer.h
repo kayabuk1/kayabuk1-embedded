@@ -1,0 +1,1 @@
+bool repeating_timer_callback(__unused struct repeating_timer *t);
